@@ -52,6 +52,7 @@ CREATE TABLE "receipt" (
 	"created_at" timestamp (3) with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp (3) with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "receipt_object_key_unique" UNIQUE("object_key"),
+	CONSTRAINT "receipt_id_owner_uq" UNIQUE("id","owner_id"),
 	CONSTRAINT "receipt_content_type_chk" CHECK ("receipt"."content_type" in ('image/jpeg','image/png','image/webp')),
 	CONSTRAINT "receipt_status_chk" CHECK ("receipt"."status" in ('uploading','ready','rejected')),
 	CONSTRAINT "receipt_mode_chk" CHECK ("receipt"."extraction_mode" is null or "receipt"."extraction_mode" in ('live','demo','failed')),
@@ -61,7 +62,7 @@ CREATE TABLE "receipt" (
 --> statement-breakpoint
 DROP TABLE "item" CASCADE;--> statement-breakpoint
 ALTER TABLE "expense" ADD CONSTRAINT "expense_owner_id_user_id_fk" FOREIGN KEY ("owner_id") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "expense" ADD CONSTRAINT "expense_receipt_id_receipt_id_fk" FOREIGN KEY ("receipt_id") REFERENCES "public"."receipt"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "expense" ADD CONSTRAINT "expense_receipt_owner_fk" FOREIGN KEY ("receipt_id","owner_id") REFERENCES "public"."receipt"("id","owner_id") ON DELETE set null ("receipt_id") ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "rate_event" ADD CONSTRAINT "rate_event_user_id_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "receipt" ADD CONSTRAINT "receipt_owner_id_user_id_fk" FOREIGN KEY ("owner_id") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "expense_receipt_id_uq" ON "expense" USING btree ("receipt_id");--> statement-breakpoint

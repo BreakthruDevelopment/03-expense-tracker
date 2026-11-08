@@ -105,6 +105,7 @@ export function createGcsDriver(opts: GcsOptions): StorageDriver {
     extraQuery: Record<string, string> = {},
   ): Promise<{ url: string; expiresAt: Date }> {
     assertObjectKey(key);
+    if (!Number.isInteger(ttl) || ttl < 1 || ttl > 604_800) throw new StorageError("Invalid signed URL lifetime.", 500);
     const issued = now();
     const { datetime, date } = stamp(issued);
     const account = await serviceAccount();

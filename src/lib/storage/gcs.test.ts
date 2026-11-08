@@ -7,6 +7,8 @@ const BUCKET = "proj-expense-tracker-uploads";
 const SA = "cloud-run-apps@proj.iam.gserviceaccount.com";
 const key = objectKeyFor("alice", "0b6f0c1e-3c1a-4f55-9d0a-1f2b3c4d5e6f");
 const NOW = new Date("2026-11-08T12:34:56.789Z");
+const PUT_QUERY =
+  "X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=cloud-run-apps%40proj.iam.gserviceaccount.com%2F20261108%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261108T123456Z&X-Goog-Expires=300&X-Goog-SignedHeaders=content-type%3Bhost%3Bx-goog-content-length-range";
 const SIG = Buffer.from("fake-signature-bytes");
 
 type Call = { url: string; init?: RequestInit };
@@ -49,21 +51,18 @@ describe("gcs signed upload", () => {
     expect(q.get("X-Goog-SignedHeaders")).toBe("content-type;host;x-goog-content-length-range");
     expect(q.get("X-Goog-Signature")).toBe(SIG.toString("hex"));
 
-    // Recompute the canonical request from the URL and compare with what was sent to signBlob.
-    const raw = url.search.slice(1).split("&X-Goog-Signature=")[0];
-    const canonical = [
-      "PUT",
-      url.pathname,
-      raw,
-      "content-type:image/jpeg\nhost:storage.googleapis.com\nx-goog-content-length-range:1,5242880\n",
-      "content-type;host;x-goog-content-length-range",
-      "UNSIGNED-PAYLOAD",
-    ].join("\n");
+    // Fixed expected values for this test's inputs (not derived from the driver's output).
     const sign = g.calls.find((c) => c.url.includes(":signBlob"))!;
     const payload = Buffer.from(JSON.parse(String(sign.init!.body)).payload, "base64").toString();
-    expect(payload).toBe(
-      ["GOOG4-RSA-SHA256", "20261108T123456Z", "20261108/auto/storage/goog4_request", createHash("sha256").update(canonical).digest("hex")].join("\n"),
-    );
+    expect(url.pathname).toBe("/proj-expense-tracker-uploads/u/alice/0b6f0c1e-3c1a-4f55-9d0a-1f2b3c4d5e6f");
+    expect(url.search.slice(1).split("&X-Goog-Signature=")[0]).toBe(PUT_QUERY);
+    expect(payload.split("\n")).toEqual([
+      "GOOG4-RSA-SHA256",
+      "20261108T123456Z",
+      "20261108/auto/storage/goog4_request",
+      // sha256 of the PUT canonical request for these inputs
+      "67e41786556107cc8492cab571aa076f36eb48290a5c52c18c8b1a5835ea6f73",
+    ]);
     // Signed as the service account through IAM, with the metadata token.
     expect(sign.url).toContain(`/serviceAccounts/${encodeURIComponent(SA)}:signBlob`);
     expect((sign.init!.headers as Record<string, string>).authorization).toBe("Bearer tok-1");
@@ -89,7 +88,7 @@ describe("gcs signed upload", () => {
 
 describe("gcs signed download", () => {
   it("signs a GET for 300 s and forces the response type and inline disposition", async () => {
-    const { d } = driver();
+    const { g, d } = driver();
     const dl = await d.signDownload(key, "image/webp");
     expect(dl.expiresAt.getTime() - NOW.getTime()).toBe(300_000);
     const q = new URL(dl.url).searchParams;
@@ -98,6 +97,22 @@ describe("gcs signed download", () => {
     expect(q.get("response-content-type")).toBe("image/webp");
     expect(q.get("response-content-disposition")).toBe('inline; filename="receipt.webp"');
     expect(q.get("X-Goog-Signature")).toBe(SIG.toString("hex"));
+
+    // The canonical request's own pieces, fixed: query (sorted, encoded), method, headers, signed headers.
+    expect(dl.url.split("&X-Goog-Signature=")[0].endsWith(
+      "X-Goog-SignedHeaders=host&response-content-disposition=inline%3B%20filename%3D%22receipt.webp%22&response-content-type=image%2Fwebp",
+    )).toBe(true);
+    const canonical = [
+      "GET",
+      "/proj-expense-tracker-uploads/u/alice/0b6f0c1e-3c1a-4f55-9d0a-1f2b3c4d5e6f",
+      new URL(dl.url).search.slice(1).split("&X-Goog-Signature=")[0],
+      "host:storage.googleapis.com\n",
+      "host",
+      "UNSIGNED-PAYLOAD",
+    ].join("\n");
+    const sign = g.calls.find((c) => c.url.includes(":signBlob"))!;
+    const last = Buffer.from(JSON.parse(String(sign.init!.body)).payload, "base64").toString().split("\n")[3];
+    expect(last).toBe(createHash("sha256").update(canonical).digest("hex"));
   });
 });
 

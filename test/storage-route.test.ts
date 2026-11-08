@@ -58,7 +58,7 @@ describe("local storage route", () => {
     expect((await put(up.url, { "Content-Type": "image/jpeg" }, jpeg)).status).toBe(400);
   });
 
-  it("rejects tampered signatures, a GET link used for PUT, and expired links with 403", async () => {
+  it("rejects a tampered signature, a GET link used for PUT, and a forged expiry with 403", async () => {
     const up = await st.storage().signUpload(key, "image/jpeg", 1000);
     const bad = new URL(up.url);
     bad.searchParams.set("sig", "0".repeat(64));
@@ -70,10 +70,10 @@ describe("local storage route", () => {
     expect((await put(expired.toString(), up.headers, jpeg)).status).toBe(403);
   });
 
-  it("404s for a missing object and a bad key, and never leaks the stored type", async () => {
+  it("404s for a missing object and for a bad key", async () => {
     const other = `u/alice/${"1".repeat(8)}-1111-4111-8111-${"1".repeat(12)}`;
     const dl = await st.storage().signDownload(other, "image/png");
     expect((await route.GET(new Request(dl.url), ctx(other))).status).toBe(404);
-    expect((await route.GET(new Request("http://localhost:3000/x"), ctx("../etc/passwd"))).status).toBeGreaterThanOrEqual(400);
+    expect((await route.GET(new Request("http://localhost:3000/x"), ctx("../etc/passwd"))).status).toBe(404);
   });
 });

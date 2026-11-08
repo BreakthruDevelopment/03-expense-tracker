@@ -27,7 +27,7 @@ const schema = z.object({
   // Provider call timeout. 20 s keeps AI calls inside Lambda's 29 s limit (route maxDuration is 25 s).
   AI_TIMEOUT_MS: z.coerce.number().int().positive().max(22000).default(20000),
   // Private Cloud Storage bucket for receipt images. Unset: the local driver in development
-  // and test, and no uploads (manual entry only) in production. Infra also sets UPLOAD_BUCKET.
+  // and test, and no uploads (manual entry only) in production.
   STORAGE_BUCKET: z
     .string()
     .regex(/^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/, "STORAGE_BUCKET is not a valid bucket name")

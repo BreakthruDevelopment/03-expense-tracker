@@ -27,6 +27,8 @@ export function assertObjectKey(key: string): { ownerId: string; receiptId: stri
   return { ownerId: m[1], receiptId: m[2] };
 }
 
+export const isValidObjectKey = (key: string) => KEY_RE.test(key);
+
 export function isReceiptContentType(value: unknown): value is ReceiptContentType {
   return typeof value === "string" && (RECEIPT_CONTENT_TYPES as readonly string[]).includes(value);
 }

@@ -4,6 +4,7 @@ import {
   char,
   check,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -11,6 +12,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  unique,
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
@@ -123,6 +125,7 @@ export const receipt = pgTable(
     updatedAt: ts("updated_at").notNull().defaultNow(),
   },
   (t) => [
+    unique("receipt_id_owner_uq").on(t.id, t.ownerId),
     index("receipt_owner_status_created_idx").on(t.ownerId, t.status, t.createdAt),
     check("receipt_content_type_chk", sql`${t.contentType} in (${list(RECEIPT_CONTENT_TYPES)})`),
     check("receipt_status_chk", sql`${t.status} in (${list(RECEIPT_STATUSES)})`),
@@ -149,11 +152,16 @@ export const expense = pgTable(
     source: text("source", { enum: EXPENSE_SOURCES }).notNull().default("manual"),
     aiMode: text("ai_mode", { enum: ["live", "demo"] }),
     // Deleting a receipt (purge, discard) keeps the expense and nulls the link.
-    receiptId: uuid("receipt_id").references(() => receipt.id, { onDelete: "set null" }),
+    // The composite FK below ties the link to the same owner.
+    receiptId: uuid("receipt_id"),
     createdAt: ts("created_at").notNull().defaultNow(),
     updatedAt: ts("updated_at").notNull().defaultNow(),
   },
   (t) => [
+    // (receipt_id, owner_id) must match one receipt row, so an expense can't point at someone
+    // else's receipt. The hand-edited migration SQL adds `SET NULL (receipt_id)` (PG 15+) so only
+    // the link is cleared, not owner_id; drizzle can't express the column list.
+    foreignKey({ columns: [t.receiptId, t.ownerId], foreignColumns: [receipt.id, receipt.ownerId], name: "expense_receipt_owner_fk" }).onDelete("set null"),
     uniqueIndex("expense_receipt_id_uq").on(t.receiptId),
     index("expense_owner_spent_idx").on(t.ownerId, t.spentOn.desc()),
     index("expense_owner_category_idx").on(t.ownerId, t.category),

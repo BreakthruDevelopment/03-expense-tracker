@@ -120,6 +120,17 @@ describe.skipIf(!url)("expense schema (Postgres)", () => {
     expect(r.status).toBe("uploading");
   });
 
+  it("won't let an expense reference another user's receipt, and a purge only nulls receipt_id", async () => {
+    const rid2 = "1b6f0c1e-3c1a-4f55-9d0a-1f2b3c4d5e6f";
+    await sql`insert into receipt (id, owner_id, object_key, content_type, size_bytes)
+      values (${rid2}, 's-alice', ${"u/s-alice/" + rid2}, 'image/png', 10)`;
+    await expect(insertExpense(expense({ owner_id: "s-bob", receipt_id: rid2, source: "receipt" }))).rejects.toThrow(/foreign key/i);
+    await insertExpense(expense({ merchant: "Linked", receipt_id: rid2, source: "receipt" }));
+    await sql`delete from receipt where id = ${rid2}`;
+    const [e] = await sql`select owner_id, receipt_id from expense where merchant = 'Linked'`;
+    expect(e).toEqual({ owner_id: "s-alice", receipt_id: null });
+  });
+
   it("links one expense per receipt, nulls the link when the receipt goes, and cascades with the user", async () => {
     await insertExpense(expense({ receipt_id: rid, source: "receipt" }));
     await expect(insertExpense(expense({ receipt_id: rid, source: "receipt" }))).rejects.toThrow();
