@@ -5,9 +5,6 @@
 **Live:** https://app3.breakthruventures.ai · **Runs on:** Google Cloud (Cloud Run, us-central1) · Part of
 [30 apps in 30 days](https://github.com/BreakthruDevelopment/ai-dev-os)
 
-> The custom domain's certificate is still being issued. Until it works, use
-> https://expense-tracker-189497094271.us-central1.run.app (same app).
-
 > **Demo data only.** The AI runs on a free-tier Gemini key, and Google may use free-tier prompts. Don't upload real
 > receipts. The repo has synthetic ones in `public/demo-receipts/`.
 
