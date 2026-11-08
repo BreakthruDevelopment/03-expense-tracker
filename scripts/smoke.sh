@@ -23,11 +23,11 @@ for path in / /sign-in; do
 done
 pass "pages render inside the shared shell"
 
-for path in /expenses /admin; do
+for path in /expenses /expenses/new /admin; do
   code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL$path")
   [ "$code" = "307" ] || fail "signed-out $path should redirect (307), got $code"
 done
-pass "signed-out expenses and admin redirect"
+pass "signed-out expenses, new expense and admin redirect"
 
 signup() {
   local jar=$1 email=$2
@@ -136,5 +136,14 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "origin: $BASE_URL" "$B
 out=$(req "$JAR_B" POST /api/admin/demo)
 [ "$(status "$out")" = "403" ] || fail "non-admin POST /api/admin/demo should be 403: $out"
 pass "demo loader refuses signed-out and non-admin callers"
+
+# Pages: a signed-in user gets the new-expense page, and a non-admin is sent away from /admin.
+page=$(curl -fsS -b "$JAR_B" "$BASE_URL/expenses/new") || fail "signed-in /expenses/new did not render"
+echo "$page" | grep -q 'Enter manually' || fail "/expenses/new is missing the Enter manually tab"
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR_B" "$BASE_URL/admin")
+[ "$code" = "307" ] || fail "non-admin /admin should redirect (307), got $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR_B" "$BASE_URL/expenses/00000000-0000-4000-8000-000000000000")
+[ "$code" = "404" ] || fail "unknown expense page should be 404, got $code"
+pass "new-expense page renders, /admin redirects non-admins, unknown expense is 404"
 
 echo "SMOKE PASS"

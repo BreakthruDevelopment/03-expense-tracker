@@ -49,3 +49,11 @@ export function formatDay(day: string): string {
   const [y, m, d] = day.split("-").map(Number);
   return `${MONTH_NAMES[m - 1].slice(0, 3)} ${d}, ${y}`;
 }
+
+/** 1536 to "1.5 KB". */
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}

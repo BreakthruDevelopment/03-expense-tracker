@@ -112,7 +112,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
         description={`${monthLabel(month)}: totals by category and every expense, per currency.`}
         actions={
           <>
-            <Link href="/scan" className={buttonPrimary}>
+            <Link href="/expenses/new" className={buttonPrimary}>
               Scan a receipt
             </Link>
             <a href={`/api/expenses/export.csv?from=${from}&to=${to}`} className={buttonOutlineAccent}>
@@ -140,7 +140,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
           <div className="space-y-4 rounded-card bg-background px-4 py-8 text-center">
             <p className="text-lg font-semibold">No expenses in {monthLabel(month)}</p>
             <p className="text-muted">Snap a receipt and check what the AI reads, or pick another month.</p>
-            <Link href="/scan" className={buttonPrimary}>
+            <Link href="/expenses/new" className={buttonPrimary}>
               Scan your first receipt
             </Link>
           </div>
