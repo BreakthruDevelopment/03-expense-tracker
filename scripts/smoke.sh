@@ -130,4 +130,11 @@ out=$(req "$JAR_A" GET "/api/expenses/$EXPENSE_ID")
 [ "$(status "$out")" = "404" ] || fail "deleted expense should be 404: $out"
 pass "A deleted the expense"
 
+# The demo loader is admin only: signed out is 401, a normal user is 403, and neither changes anything.
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "origin: $BASE_URL" "$BASE_URL/api/admin/demo")
+[ "$code" = "401" ] || fail "signed-out POST /api/admin/demo should be 401, got $code"
+out=$(req "$JAR_B" POST /api/admin/demo)
+[ "$(status "$out")" = "403" ] || fail "non-admin POST /api/admin/demo should be 403: $out"
+pass "demo loader refuses signed-out and non-admin callers"
+
 echo "SMOKE PASS"

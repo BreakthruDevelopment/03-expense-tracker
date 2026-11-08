@@ -14,7 +14,9 @@
     "db:migrate": "tsx scripts/migrate.mts",
     "db:seed": "tsx scripts/seed.mts",
     "smoke": "bash scripts/smoke.sh",
-    "eval:receipts": "tsx scripts/eval-receipts.mts"
+    "eval:receipts": "tsx scripts/eval-receipts.mts",
+    "demo:receipts": "tsx scripts/make-demo-receipts.mts",
+    "seed:demo": "node --conditions=react-server --import tsx scripts/seed-demo.mts"
   },
   "dependencies": {
     "better-auth": "^1.7.15",
@@ -27,6 +29,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@tailwindcss/turbopack": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
