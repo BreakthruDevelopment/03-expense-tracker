@@ -155,6 +155,12 @@ export async function extractReceipt(actor: Actor, receiptId: string): Promise<E
     .set({ ...columns, updatedAt: sql`now()` })
     .where(ownedBy(receipt, actor, eq(receipt.id, id), isNull(receipt.extractionMode), sql`${claimStartedAt} = ${startedAt}`))
     .returning({ id: receipt.id });
-  if (written.length === 0) log.warn("receipt.extraction_claim_lost", { receiptId: id });
+  if (written.length === 0) {
+    // Another request took over: its stored answer is the one that counts, so return that (or ask to retry).
+    log.warn("receipt.extraction_claim_lost", { receiptId: id });
+    const [now] = await db().select().from(receipt).where(ownedBy(receipt, actor, eq(receipt.id, id))).limit(1);
+    if (now?.extractionMode) return stored(now);
+    throw new ConflictError("This receipt is already being read. Try again in a moment.");
+  }
   return result;
 }

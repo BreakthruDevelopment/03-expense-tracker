@@ -241,10 +241,12 @@ export async function sweepStaleReceipts(opts: { ownerId?: string; limit?: numbe
       and(eq(receipt.status, "ready"), lt(receipt.createdAt, sql`now() - ${sql.raw(`interval '${STALE_DRAFT_SECONDS} seconds'`)}`)),
     ),
   );
+  // Selection also filters attached drafts, so old attached receipts can't fill the batch and starve real work.
+  const unattached = sql`not exists (select 1 from ${expense} where ${expense.receiptId} = ${receipt.id})`;
   const rows = await db()
     .select({ id: receipt.id })
     .from(receipt)
-    .where(stale)
+    .where(and(stale, unattached))
     .orderBy(receipt.createdAt)
     .limit(Math.min(opts.limit ?? SWEEP_BATCH, SWEEP_BATCH));
   let removed = 0;

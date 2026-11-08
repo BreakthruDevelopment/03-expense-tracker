@@ -123,6 +123,23 @@ describe.skipIf(!url)("receipt hardening (Postgres, local storage)", () => {
       expect(await rowExists(id)).toBe(true);
     });
 
+    it("sweep isn't starved by more than SWEEP_BATCH old attached receipts", async () => {
+      const n = 55;
+      await sql`insert into receipt (id, owner_id, object_key, content_type, size_bytes, status, created_at)
+        select g, ${bob.id}, 'u/' || ${bob.id} || '/' || g::text, 'image/jpeg', 100, 'ready', now() - interval '10 days'
+        from (select gen_random_uuid() as g from generate_series(1, ${n})) t`;
+      await sql`insert into expense (owner_id, merchant, spent_on, amount_minor, source, receipt_id)
+        select ${bob.id}, 'Old', '2026-01-01', 100, 'receipt', id from receipt where owner_id = ${bob.id}`;
+      const t = await rc.initUpload(alice, { contentType: "image/jpeg", sizeBytes: 500 });
+      await st.storage().put(keyOf(alice.id, t.receiptId), JPEG.subarray(0, 500), "image/jpeg");
+      // Newer than every attached receipt, so ordering by age puts it after all 55 of them.
+      await sql`update receipt set created_at = now() - interval '2 hours' where id = ${t.receiptId}`;
+      await sql`update receipt set created_at = now() - interval '20 days' where owner_id = ${bob.id}`;
+      expect(await rc.sweepStaleReceipts()).toBe(1);
+      expect(await rowExists(t.receiptId)).toBe(false);
+      expect((await sql`select count(*)::int as n from receipt where owner_id = ${bob.id}`)[0].n).toBe(n);
+    });
+
     it("sweep still removes a stale unattached draft, object and row, and an old unconfirmed upload", async () => {
       const a = await draft(alice);
       const t = await rc.initUpload(bob, { contentType: "image/jpeg", sizeBytes: 500 });

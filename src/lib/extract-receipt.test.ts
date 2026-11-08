@@ -18,12 +18,27 @@ describe("modelOutputSchema", () => {
 
   it("still rejects output with no usable shape", () => {
     expect(() => modelOutputSchema.parse({ isReceipt: "maybe" })).toThrow();
-    expect(() => modelOutputSchema.parse({ ...good, merchant: 5 })).toThrow();
+    expect(() => modelOutputSchema.parse({ ...good, isReceipt: undefined })).toThrow();
   });
 
   it("a bad field then shows up as a warning on the draft", () => {
     const extraction = applyGuardrails(modelOutputSchema.parse({ ...good, total: 0, currency: "??" }), NOW);
     expect(extraction.warnings.map((w) => w.code)).toEqual(expect.arrayContaining(["currency_missing", "total_missing"]));
+  });
+});
+
+describe("merchant and date", () => {
+  it("a bad merchant becomes null with a merchant_missing warning", () => {
+    const e = applyGuardrails(modelOutputSchema.parse({ ...good, merchant: 5 }), NOW);
+    expect(e.draft?.merchant).toBeNull();
+    expect(e.warnings.map((w) => w.code)).toContain("merchant_missing");
+  });
+
+  it("a missing date warns with date_missing", () => {
+    const e = applyGuardrails(modelOutputSchema.parse({ ...good, date: null }), NOW);
+    expect(e.draft?.spentOn).toBeNull();
+    expect(e.warnings.map((w) => w.code)).toContain("date_missing");
+    expect(applyGuardrails(modelOutputSchema.parse(good), NOW).warnings.map((w) => w.code)).not.toContain("date_missing");
   });
 });
 

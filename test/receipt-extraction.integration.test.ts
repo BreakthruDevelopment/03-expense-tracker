@@ -307,7 +307,7 @@ describe.skipIf(!url)("receipt extraction (Postgres, local storage)", () => {
     expect((await row(id)).extraction).toBeNull();
   });
 
-  it("stamps the claim with the database clock", async () => {
+  it("stamps the claim with the database clock, not the app's clock", async () => {
     const id = await upload(alice, PNG);
     let seen = 0;
     let dbNow = 0;
@@ -316,9 +316,15 @@ describe.skipIf(!url)("receipt extraction (Postgres, local storage)", () => {
       dbNow = Number((await sql`select (extract(epoch from now()) * 1000)::bigint as t`)[0].t);
       return { data: req.schema.parse(model), provider: "stub", model: "stub", demo: false, latencyMs: 1 };
     });
-    await rx.extractReceipt(alice, id);
-    expect(seen).toBeGreaterThan(0);
+    // The app's clock runs one hour ahead of the database's.
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 3_600_000 });
+    try {
+      await rx.extractReceipt(alice, id);
+    } finally {
+      vi.useRealTimers();
+    }
     expect(Math.abs(dbNow - seen)).toBeLessThan(5000);
+    expect(Math.abs(seen - (Date.now() + 3_600_000))).toBeGreaterThan(3_000_000);
   });
 
   it("drops the final write when another request has taken over the claim", async () => {
@@ -328,10 +334,21 @@ describe.skipIf(!url)("receipt extraction (Postgres, local storage)", () => {
       await sql`update receipt set extraction = ${sql.json({ status: "running", startedAt: 42 })} where id = ${id}`;
       return { data: req.schema.parse(model), provider: "stub", model: "stub", demo: false, latencyMs: 1 };
     });
-    await rx.extractReceipt(alice, id); // still answers its own caller
+    // The request that lost its claim doesn't return its own answer: the takeover's row is not finished, so it asks to retry.
+    await expect(rx.extractReceipt(alice, id)).rejects.toMatchObject({ status: 409 });
     const r = await row(id);
     expect(r.extraction_mode).toBeNull();
     expect(r.extraction).toEqual({ status: "running", startedAt: 42 });
+  });
+
+  it("returns the stored answer when the request that took over its claim has already finished", async () => {
+    const id = await upload(alice, PNG);
+    const winner = { isReceipt: false, draft: null, confidence: "low", warnings: [] };
+    gen().mockImplementationOnce(async (req: { schema: { parse: (v: unknown) => unknown } }) => {
+      await sql`update receipt set extraction = ${sql.json(winner)}, extraction_mode = 'live' where id = ${id}`;
+      return { data: req.schema.parse(model), provider: "stub", model: "stub", demo: false, latencyMs: 1 };
+    });
+    expect(await rx.extractReceipt(alice, id)).toMatchObject({ mode: "live", extraction: winner });
   });
 
   it("holds the per-user hourly cap under concurrent requests: 12 parallel scans, exactly 10 run", async () => {

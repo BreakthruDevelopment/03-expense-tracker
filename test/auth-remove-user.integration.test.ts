@@ -172,6 +172,32 @@ describe.skipIf(!url)("remove-user hook and extract route auth (Postgres, local 
       expect((await counts(alice)).receipts).toBe(1);
     });
 
+    it('does not purge for a role like "user, admin" (Better Auth splits on "," without trimming, so the endpoint says 403)', async () => {
+      const id = await upload(bob);
+      await sql`update "user" set role = 'user, admin' where id = ${admin.id}`;
+      const res = await removeViaHttp(admin, bob.id);
+      expect(res.status).toBe(403);
+      expect(await exists(bob)).toBe(true);
+      expect(await objectExists(bob, id)).toBe(true);
+      expect((await counts(bob)).receipts).toBe(1);
+    });
+
+    it("a banned admin gets no purge from the hook (Better Auth itself still lets the removal through)", async () => {
+      const id = await upload(bob);
+      await sql`update "user" set banned = true where id = ${admin.id}`;
+      const restore = breakStorageRemove();
+      let res: Response;
+      try {
+        res = await removeViaHttp(admin, bob.id);
+      } finally {
+        restore();
+      }
+      // With storage down, the hook's own 502 ("so the user was not removed") would appear if it had run.
+      expect(await res.text()).not.toMatch(/was not removed/);
+      expect(res.status).not.toBe(502);
+      expect(await objectExists(bob, id)).toBe(true);
+    });
+
     it("does not purge when an admin tries to remove themselves", async () => {
       const id = await upload(admin);
       const res = await removeViaHttp(admin, admin.id);

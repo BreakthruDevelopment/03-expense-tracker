@@ -29,7 +29,7 @@ const text120 = z.string().transform((s) => s.replace(/\p{C}/gu, " ").replace(/\
 /** What the model must return. Unknown keys are dropped; a bad category becomes "other". */
 export const modelOutputSchema = z.object({
   isReceipt: z.boolean(),
-  merchant: text120.nullable(),
+  merchant: text120.nullable().catch(null),
   // One unreadable field becomes null (and a warning downstream) instead of failing the whole parse.
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().catch(null),
   currency: z.string().regex(/^[A-Z]{3}$/).nullable().catch(null),
@@ -46,6 +46,7 @@ export type ModelOutput = z.infer<typeof modelOutputSchema>;
 
 export const WARNING_CODES = [
   "not_a_receipt",
+  "date_missing",
   "date_invalid",
   "date_out_of_range",
   "currency_unsupported",
@@ -120,7 +121,9 @@ export function applyGuardrails(out: ModelOutput, now: Date): ReceiptExtraction 
   let confidence = out.confidence;
 
   let spentOn = out.date;
-  if (spentOn !== null) {
+  if (spentOn === null) {
+    warnings.push({ code: "date_missing", message: "The date couldn't be read. Enter it yourself." });
+  } else {
     if (!validDate(spentOn)) {
       spentOn = null;
       warnings.push({ code: "date_invalid", message: "The date couldn't be read. Enter it yourself." });

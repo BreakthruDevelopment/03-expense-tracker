@@ -25,8 +25,12 @@ const removeUserBody = z.object({ userId: z.coerce.string().min(1) });
 const purgeBeforeRemoveUser = createAuthMiddleware(async (ctx) => {
   if (ctx.path !== "/admin/remove-user") return;
   const session = await getAuthoritativeSessionFromCtx(ctx);
-  const roles = String(session?.user.role ?? "").split(",").map((r) => r.trim());
-  if (!session || !roles.includes("admin")) return;
+  if (!session) return;
+  // Same parsing as Better Auth's own permission check: split on "," with no trimming, so a role like
+  // "user, admin" is not an admin here either (the endpoint would answer 403 after we had purged).
+  const user = session.user as typeof session.user & { role?: string | null; banned?: boolean | null };
+  if (user.banned) return;
+  if (!(user.role || "user").split(",").includes("admin")) return;
   const body = removeUserBody.safeParse(ctx.body);
   if (!body.success || body.data.userId === session.user.id) return;
   try {

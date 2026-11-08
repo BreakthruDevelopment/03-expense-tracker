@@ -60,19 +60,9 @@ describe("gcs signed upload", () => {
       "GOOG4-RSA-SHA256",
       "20261108T123456Z",
       "20261108/auto/storage/goog4_request",
-      // sha256 of the PUT canonical request, written out here by hand (headers sorted, create-only header included)
-      createHash("sha256")
-        .update(
-          [
-            "PUT",
-            "/proj-expense-tracker-uploads/u/alice/0b6f0c1e-3c1a-4f55-9d0a-1f2b3c4d5e6f",
-            PUT_QUERY,
-            "content-type:image/jpeg\nhost:storage.googleapis.com\nx-goog-content-length-range:1,5242880\nx-goog-if-generation-match:0\n",
-            "content-type;host;x-goog-content-length-range;x-goog-if-generation-match",
-            "UNSIGNED-PAYLOAD",
-          ].join("\n"),
-        )
-        .digest("hex"),
+      // Pinned sha256 of the PUT canonical request for these inputs (headers sorted, create-only header
+      // included). Computed once from the hand-written canonical string, not by the driver.
+      "0035f66401ccb45801fb40a3b1e8bf24ba015cf6b8fcb90428d751ae667f25f0",
     ]);
     // Signed as the service account through IAM, with the metadata token.
     expect(sign.url).toContain(`/serviceAccounts/${encodeURIComponent(SA)}:signBlob`);
