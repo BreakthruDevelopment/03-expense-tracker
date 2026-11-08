@@ -1,53 +1,64 @@
 # Expense Tracker
 
-The starting point for every app in Breakthru Ventures' **30 apps in 30 days** portfolio. Each app is a
-responsive web app with a Postgres database, sign-in with roles, one AI feature, and a single container
-image that deploys to AWS, Azure, Google Cloud or Oracle Cloud.
+> Small teams lose time and trust on receipts: this app reads a photo into an expense form, keeps the image private, and saves nothing until the person checks the numbers.
 
-## What this app does
+**Live:** https://app3.breakthruventures.ai · **Runs on:** Google Cloud (Cloud Run, us-central1) · Part of
+[30 apps in 30 days](https://github.com/BreakthruDevelopment/ai-dev-os)
 
-_Each app replaces this section: the customer problem, who uses it, and what the AI feature does._
+> The custom domain's certificate is still being issued. Until it works, use
+> https://expense-tracker-189497094271.us-central1.run.app (same app).
 
-Users photograph receipts, review what the AI read from them and keep a monthly expense report. Receipt images are
-private files in a Cloud Storage bucket (signed URLs only), and nothing is saved until the user confirms.
-_This section is expanded by the docs issue; the data layer and storage module are in place._
+> **Demo data only.** The AI runs on a free-tier Gemini key, and Google may use free-tier prompts. Don't upload real
+> receipts. The repo has synthetic ones in `public/demo-receipts/`.
 
-Storage: `src/lib/storage` has a `gcs` driver (V4 signed URLs signed through IAM `signBlob`, no key files), a `local`
-driver for development and CI (HMAC-signed URLs served by `/api/storage/local/...`) and a `none` driver (scanning off).
-`STORAGE_BUCKET` selects `gcs`; unset means `local` outside production.
+## What it does
 
-API (all owner-only: another user's, and admin's, request for an expense or receipt is a 404; cookie mutations need
-our own `Origin`; JSON bodies are capped at 16 KB):
+The client problem: small businesses, accounting firms and fintech teams want "Expensify for us". People snap a
+receipt on a phone, the app reads it, they fix the numbers, and it lands in a monthly report they can export. Clients
+care about two things: receipt images stay private, and the AI never saves anything on its own.
 
-| Route | What it does |
-| --- | --- |
-| `GET/POST /api/expenses` | List own (`month=YYYY-MM`, `category`, `page`, `pageSize`); create. `amount` and `tax` are strings like `"12.40"`, stored as integer minor units. `receiptId` attaches the caller's own `ready` draft |
-| `GET/PATCH/DELETE /api/expenses/[id]` | PATCH needs the `updatedAt` you loaded (409 when stale); DELETE removes the image first |
-| `GET /api/expenses/summary?month=` | Totals by category, per currency |
-| `GET /api/expenses/export.csv?from=&to=` | Own rows only (at most 5,000); cells starting with `= + - @`, tab or CR get a leading `'` |
-| `POST /api/receipts/uploads` | `{contentType, sizeBytes}` returns `{receiptId, url, method: "PUT", headers, expiresAt}` |
-| `POST /api/receipts/[id]/confirm` | Reads the object back, checks real size and magic bytes (JPEG, PNG, WebP); a wrong file is deleted (422) |
-| `GET /api/receipts/[id]/url` | Fresh 300-second signed download URL |
-| `DELETE /api/receipts/[id]` | Discard a draft (object, then row) |
-| `GET /api/admin/stats`, `POST /api/admin/users/[id]/purge-receipts` | Admin: aggregate counts and caps; delete one user's images |
+- **Scan a receipt (user).** Take a photo or choose a file on `/expenses/new`. The browser shrinks it to at most 1,600 px
+  JPEG, uploads it straight to a private bucket, and the AI fills a form next to the photo. The form shows a confidence
+  badge and any warnings. Nothing is saved until the user presses Save.
+- **Enter an expense by hand (user).** Same form, no photo. It also works when scanning is switched off or a cap is hit.
+- **Review the month (user).** `/expenses` has a month and category filter, totals per currency, a bar chart by category,
+  and a paged list. Amounts in different currencies are never converted or added together.
+- **Edit, delete, export (user).** Edits carry a conflict check (a stale save gets a 409 message). Deleting an expense
+  removes its image first. Export CSV downloads the month's expenses, and only the signed-in user's own.
+- **Admin.** `/admin` shows users, expenses, receipts stored and bytes against the caps, uploads and AI readings today
+  against the daily caps, a "Load demo workspace" button, and a per-user "Purge receipt images" button. Admin sees counts
+  and sizes only, never anyone's expenses or images.
 
-**Upload flow.** `POST /api/receipts/uploads`, then `PUT` the file to `url`, then `POST /api/receipts/[id]/confirm`.
-The browser must send exactly the returned `headers` on the PUT: `Content-Type` and `x-goog-content-length-range`
-(`1,<sizeBytes>`) are part of the signature, so any other type, or a body outside that size range, is refused by
-storage with a 400. Caps (all fail closed): 30 receipts per user, 20 uploads per user per hour, 100 uploads a day
-app-wide, `STORAGE_MAX_BYTES` stored in total (real sizes after confirm). Unconfirmed uploads older than an hour and
-unused drafts older than a day are swept. Removing a user through the admin plugin purges their images first (a
-before-hook on `/admin/remove-user`), so a storage failure aborts the removal with nothing deleted. A database hook on
-user deletion purges again as a backstop for other paths (such as self-delete), but Better Auth has already removed that
-user's sessions and accounts by then, so only the hook protects the admin path. That protection covers storage failures only: if the caller's session or role
-changes, or the database fails, between the hook and the endpoint, the receipts can be purged while the user remains;
-retrying the removal finishes it.
+Supported currencies: USD, EUR, GBP, CAD, AUD, MXN, CHF, INR. Categories: meals, travel, lodging, transport, office,
+software, equipment, other. Money is stored as whole minor units (cents), never as floats.
 
-The signed upload also carries `x-goog-if-generation-match: 0` (create only): a second `PUT` to the same URL gets a 412,
-so a confirmed image can't be overwritten inside the 5-minute window. Magic-byte checks prove a file *starts* like a
-JPEG, PNG or WebP, not that it is only that: a polyglot (valid image, plus script or archive bytes) passes. That is
-acceptable because images are only ever served with a forced `image/*` type and `inline` disposition from the storage
-host, never the app origin, and are only decoded by the model provider.
+## The AI feature
+
+**Receipt extraction.** One receipt photo goes through the shared `generate()` gateway as task `extract-receipt`, with
+image input. The live model is Gemini `gemini-flash-lite-latest`. The route is `POST /api/receipts/[id]/extract`.
+
+How it is kept safe:
+
+- **Verified file first.** The server re-reads the uploaded object and checks its real size (at most 5 MB) and its first
+  bytes (JPEG, PNG or WebP). A wrong file is deleted and the request fails with 422. It never reaches the model.
+- **Image text is data.** The system prompt says all text in the image is to be transcribed, never obeyed, and to ignore
+  text that asks to change values, categories or approval. The model has no tools.
+- **Validated output.** A zod schema checks the answer. One unreadable field becomes `null` instead of failing the whole
+  read. An unknown category becomes `other`. Unknown keys are dropped.
+- **Guardrails in code.** "Not a receipt" gives no prefill and no expense. A date more than a day ahead or before 2000
+  becomes empty with a warning. An unsupported currency becomes empty with "choose a currency". If line items plus tax are
+  more than 1% off the total, the draft gets a warning and confidence drops to `low`.
+- **Nothing saves by itself.** Extraction only returns a draft. An expense exists only after the user posts the form.
+- **Limits.** One reading per receipt (a repeat call returns the stored result), 10 per user per hour, and 100 per day for
+  the whole app. A model text prompt is capped at 1,000 characters. Caps fail closed with a clear message, and manual
+  entry still works.
+- **Fallbacks.** If the model fails, the receipt is marked `failed` and the user gets the manual form. With
+  `AI_PROVIDER=demo`, or `AI_FALLBACK_TO_DEMO=true` on a quota error, a recorded answer is used and the form says
+  "Demo extraction: a recorded answer, not read from your image". The fixture is in `src/lib/ai/demo.ts`.
+- **Logs.** Logs carry task, mode, latency, confidence and warning codes. Never image bytes, merchants or amounts.
+
+**Evals.** `test/ai-evals.test.ts` runs in CI with a stubbed `generate`. `pnpm eval:receipts` is a manual check: it sends
+the synthetic images to live Gemini and prints pass or fail per row. It needs `GEMINI_API_KEY` and is not in CI.
 
 ## Architecture
 
@@ -55,121 +66,183 @@ host, never the app origin, and are only decoded by the model provider.
 Browser (desktop and phone)
    │ HTTPS + session cookie
    ▼
-Next.js container ── pages, server actions, route handlers (/api/*)
-   │                  auth + RBAC, zod validation, AI gateway, JSON logs, /api/health
-   ├──► Postgres (Drizzle; pgvector available for RAG)
-   └──► Model API (Gemini free tier, Claude optional, or recorded demo answers)
+Next.js container on Cloud Run ── pages, server actions, /api/*
+   │   auth + roles, zod validation, owner checks, AI gateway, JSON logs, /api/health
+   ├──► Postgres (Drizzle) on an e2-micro VM
+   ├──► Cloud Storage: private bucket, receipt images only
+   └──► Gemini API (vision), through generate()
+
+Upload:  browser ──PUT (signed URL)──► bucket      (the image never passes through the app)
+Read:    app ──reads the object──► checks size and type ──► Gemini ──► draft ──► form
+View:    app checks the owner ──► 300-second signed download link
 ```
 
-| Concern | Where |
-| --- | --- |
-| Config, validated at startup | `src/lib/env.ts` |
-| Schema and migrations | `src/lib/db/schema.ts`, `drizzle/` |
-| Sign-in, sessions, roles | `src/lib/auth/` (Better Auth + admin plugin) |
-| Access rules | `src/lib/auth/rbac.ts`, enforced in every data function |
-| AI gateway | `src/lib/ai/` — input cap, JSON schema validation, demo fallback |
-| Health check | `GET /api/health` (503 if the database is down) |
+**Upload flow.** `POST /api/receipts/uploads` with `{contentType, sizeBytes}` returns a signed `PUT` URL and the exact
+headers to send. The browser sends the file, then calls `POST /api/receipts/[id]/extract`, which verifies the object and
+runs the model. (`POST /api/receipts/[id]/confirm` also exists, to verify a file without extracting.) The signed `PUT`
+fixes the content type and a size range, and allows create-only, so a second `PUT` to the same URL gets a 412.
 
-## Run locally
+**Signed URLs without key files.** On Cloud Run the `gcs` driver signs through IAM `signBlob` as the service account. No
+JSON key exists. Download links last 300 seconds, are issued only after the owner check, and force an `image/*` type.
+
+**Storage drivers** (`src/lib/storage`): `gcs` when `STORAGE_BUCKET` is set; `local` for development and CI (files under
+`.data/uploads`, HMAC-signed URLs, refused in production); `none` otherwise, which turns scanning off and leaves manual
+entry working. `GET /api/health` reports which one is active, never the bucket name.
+
+**Cleanup.** Unconfirmed uploads older than an hour and unused drafts older than a day are swept (on upload start and on
+the admin page). Removing a user purges their images first.
+
+## Security
+
+| Who | Can do |
+| --- | --- |
+| Signed out | See the landing page and sign in or up. Everything else redirects (pages) or returns 401 (API). |
+| `user` | Create, read, edit and delete **their own** expenses and receipts, export their own CSV. |
+| `admin` | Everything a user can, on their own data, plus counts and caps, load the demo workspace, and purge one user's images. |
+
+**Admin cannot read other people's expenses or receipt images.** Receipts carry card digits, names and places. The
+template's "admin passes every check" rule is deliberately not used for expenses or receipts.
+
+- **Owner-only queries.** Every expense and receipt query filters on the owner (`src/lib/owned.ts`). Someone else's row
+  is a 404 for everyone, admin included. Pages and routes check the session on the server; data functions take the
+  acting user.
+- **Same-origin check.** Cookie-based writes need our own `Origin`. JSON bodies are capped at 16 KB. Input is validated
+  with zod at every boundary.
+- **Private files.** Images live in a private bucket and are reachable only through short-lived signed links. Object
+  keys are `u/<ownerId>/<receiptId>` with no file name.
+- **CSV safety.** Cells starting with `=`, `+`, `-`, `@`, tab or CR get a leading `'` so spreadsheets don't run them. A
+  CSV has at most 5,000 rows.
+- **Photo privacy.** Resizing in the browser also drops EXIF data such as location.
+- **Known limit.** The first-bytes check proves a file *starts* like an image, not that it is only an image. That is
+  acceptable here because images are served only with a forced `image/*` type from the storage host, never from the app,
+  and are decoded only by the model provider.
+- **Removing a user.** An admin removing a user purges that user's images first, so a storage failure aborts the
+  removal with nothing deleted. A database hook purges again as a backstop for other paths. Known limit: if the
+  admin's session or role changes, or the database fails, between the purge and the removal, the images can be gone
+  while the user remains. Retrying the removal finishes it.
+- **Known limit.** A signed download link works for anyone who holds it until it expires (300 seconds). The owner check
+  happens when it is issued.
+- **Tests.** `test/expenses.integration.test.ts` and `test/receipts-hardening.integration.test.ts` run against real
+  Postgres and cover other-user and admin 404s, stale updates, caps, rejected files and CSV escaping. Further tests cover
+  extraction, the demo seed, user removal and the storage routes.
+
+## Free-tier budget
+
+Open sign-up means one person with many accounts could use up the app-wide daily caps. That is acceptable for a demo,
+and the caps reset at midnight UTC.
+
+| Resource | Cap (default, changeable by env) |
+| --- | --- |
+| Receipts per user | 30 (`RECEIPTS_PER_USER`) |
+| Expenses per user | 500 |
+| Image size | 5 MB each (the browser sends at most 1,600 px) |
+| Uploads | 20 per user per hour, 100 per day app-wide (`UPLOAD_DAILY_CAP`) |
+| Stored images in total | 2 GB (`STORAGE_MAX_BYTES`) |
+| AI readings | 10 per user per hour, 100 per day app-wide (`EXTRACT_DAILY_CAP`) |
+| Download links | 120 per user per hour |
+| Demo workspace loads | 1 per minute, 5 per day app-wide |
+
+## Demo data
+
+Three demo users (Ada, Ben, Cleo at `@demo.breakthru.test`) own about 30 fictional expenses over the last three months.
+Five have a synthetic receipt image with a pre-filled extraction (`extraction_mode = demo`), so loading them makes no
+model call. Ada is an admin.
+
+- **Live:** an admin presses "Load demo workspace" on `/admin` (or `POST /api/admin/demo`). Demo users get random
+  passwords nobody knows, so on the live site you sign up with your own account. A reload replaces only the demo users'
+  expenses and images.
+- **Local:** `DEMO_SEED=yes APP_URL=http://localhost:3000 DEMO_PASSWORD=<10+ characters> pnpm seed:demo`. All three get
+  that password. It refuses production URLs (`app3.breakthruventures.ai`, `*.run.app`, `*.azurecontainerapps.io`).
+- `pnpm demo:receipts` redraws the synthetic images in `public/demo-receipts/`.
+
+## Run it locally
 
 ```bash
-cp .env.example .env.local          # then set BETTER_AUTH_SECRET (openssl rand -base64 32)
+cp .env.example .env.local          # set BETTER_AUTH_SECRET: openssl rand -base64 32
 docker compose up -d db
 pnpm install
 pnpm db:migrate
-pnpm dev                             # http://localhost:3000
+pnpm dev                            # http://localhost:3000
 ```
 
-To make yourself an admin: sign up, then `SEED_ADMIN_EMAIL=you@example.com SEED_ADMIN_PASSWORD=... pnpm db:seed`
-while the app is running.
+With no `STORAGE_BUCKET`, receipts go to `.data/uploads`. With no `GEMINI_API_KEY` (`AI_PROVIDER=demo`, the default), the
+scan returns the recorded Bluebird Coffee answer. To make yourself an admin: sign up, then
+`SEED_ADMIN_EMAIL=you@example.com SEED_ADMIN_PASSWORD=... pnpm db:seed` while the app runs.
 
-### Demo data
+Needs Node 22 or later and pnpm.
 
-Three demo users (Ada, Ben, Cleo at `@demo.breakthru.test`) own 30 fictional expenses over the last three months;
-five have a synthetic receipt image (`public/demo-receipts/`, drawn by `pnpm demo:receipts`) and a pre-filled
-extraction with `extraction_mode = demo`, so no model call is made.
+### Environment variables (names only)
 
-- Locally: `DEMO_SEED=yes APP_URL=http://localhost:3000 DEMO_PASSWORD=<10+ chars> pnpm seed:demo` (Ada becomes an admin
-  and all three get that password). It refuses a production `APP_URL` (`app3.breakthruventures.ai`, `*.run.app`,
-  `*.azurecontainerapps.io`) or Azure database host.
-- Live: an admin posts to `POST /api/admin/demo` (no body, same-origin; 1 per minute and 5 per day app-wide). Demo users
-  get random passwords nobody knows. Either way, a reload replaces only the demo users' expenses and receipt objects.
-
-## Design system
-
-Every app shares the Breakthru look (guide and concept: `ai-dev-os/design/`). Tokens live in `src/app/globals.css`
-(light and dark; use `bg-surface`, `text-muted`, `border-border`, `bg-accent` and the status tokens, never raw colors).
-Fonts load through `next/font/google` in `src/app/layout.tsx`: Newsreader (`font-display`), Public Sans (`font-sans`),
-IBM Plex Mono (`font-mono`). Set the app's name once in `src/lib/app-config.ts` (`APP_TITLE`, or the `APP_NAME` variable).
-
-| Component | Location | Use |
-| --- | --- | --- |
-| `AppShell` | `src/components/app-shell.tsx` | Header (logo, app name, nav, sign in or user and sign out) and footer; wraps every page in the root layout |
-| `PageIntro` | `src/components/ui/` | Eyebrow, Newsreader headline, one-line description, actions |
-| `StatTile`, `StatGrid` | `src/components/ui/` | A number and a label; tiles stack at 375px |
-| `FilterBar` | `src/components/ui/` | Search, select filters, sort and table/cards toggle as a GET form (state in the URL) |
-| `StatusBadge` | `src/components/ui/` | Live, building, blocked, not started (neutral), healthy, degraded, down |
-| `DataList` | `src/components/ui/` | Table from 640px, cards below |
-| `Panel` | `src/components/ui/` | Titled panel; `collapsible` adds a "Show all" toggle (small client component) |
-| `DemoBadge` | `src/components/ui/` | "Demo data" label for seeded or demo content |
-
-The header links come from `NAV_LINKS` in `src/lib/app-config.ts`; each app must edit that list (links break if the
-app deletes those pages).
-
-Shared button and field classes are in `src/components/ui/styles.ts` (44px minimum height). Don't add `loading.tsx` or
-`<Suspense>` above a page that calls `requireRoleOrRedirect()` or `notFound()`.
+| Name | Purpose |
+| --- | --- |
+| `APP_NAME`, `APP_URL` | Display name; public URL used for sign-in, cookies and the Origin check |
+| `DATABASE_URL`, `BETTER_AUTH_SECRET` | Postgres connection; session secret (32+ characters) |
+| `AI_PROVIDER`, `AI_MODEL` | `demo` (default), `gemini` or `anthropic`; optional model override |
+| `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` | Model keys |
+| `AI_FALLBACK_TO_DEMO`, `AI_TIMEOUT_MS`, `AI_EMBED_MODEL` | Use the recorded answer on failure (default true); model timeout (default 20,000 ms, max 22,000); embedding model (unused by this app) |
+| `STORAGE_BUCKET`, `STORAGE_LOCAL_DIR` | Bucket for the `gcs` driver; folder for the `local` driver |
+| `STORAGE_ALLOW_LOCAL` | CI only: lets the built app use the local driver on `http://localhost` |
+| `UPLOAD_DAILY_CAP`, `EXTRACT_DAILY_CAP`, `STORAGE_MAX_BYTES`, `RECEIPTS_PER_USER` | The caps above |
+| `LOG_LEVEL`, `MIGRATE_ON_START` | Log level; apply migrations when the server starts |
+| `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`, `SEED_USER_EMAIL`, `SEED_USER_PASSWORD` | Used by `pnpm db:seed` |
 
 ## Checks
 
 ```bash
-pnpm lint && pnpm typecheck && pnpm test   # unit tests
-TEST_DATABASE_URL=postgres://... pnpm test # plus data-layer tests against real Postgres
-pnpm build && pnpm smoke                   # end-to-end smoke test against a running app
+pnpm lint && pnpm typecheck && pnpm test    # unit tests
+TEST_DATABASE_URL=postgres://... pnpm test  # plus integration tests against real Postgres
+pnpm build && pnpm smoke                    # end-to-end against a running app
+BASE_URL=https://app3.breakthruventures.ai REQUIRE_RECEIPTS=1 bash scripts/smoke.sh   # the same smoke test, live
 ```
 
-CI runs all of these plus both container builds on every pull request.
+`scripts/smoke.sh` signs up two users and checks, in order: health, signed-out redirects and 401s, A's expense, B's 404s,
+a stale update (409), the receipt flow (refused `image/gif` and 6 MB, signed `PUT`, a repeat `PUT` is 412, B's 404 on A's
+receipt, extraction, save), CSV per user, admin routes closed to normal users, and cleanup of what it created.
 
-## Deploy
+The **Live smoke test** workflow (`.github/workflows/live-smoke.yml`) runs it against a deployed URL. It passed against
+the run.app URL, including a live Gemini extraction.
 
-Every push to `main` publishes a multi-arch image (x86 and ARM) to GitHub Container Registry as
-`ghcr.io/breakthrudevelopment/<repo>:sha-<commit>`. [30-apps-infra](https://github.com/BreakthruDevelopment/30-apps-infra)
-deploys those tags to AWS, Azure, Google Cloud and Oracle Cloud with Terraform; this repo holds no cloud credentials.
+## Deploy it yourself
 
-With `MIGRATE_ON_START=true` the server applies pending migrations before taking traffic, holding a Postgres
-advisory lock so instances starting together can't race. `pnpm db:migrate` does the same by hand.
+The same container image runs on all four clouds (see `infra/README.md`). Every push to `main` publishes a multi-arch
+image to GitHub Container Registry. [30-apps-infra](https://github.com/BreakthruDevelopment/30-apps-infra) deploys a
+tagged image with Terraform. This repo holds no cloud credentials.
 
-## Using the AI feature
+- **Google Cloud (where this app runs).** Cloud Run in us-central1, Postgres on an e2-micro VM, and a private Cloud
+  Storage bucket, set up through this app's entry in `apps.yaml` (`storage: true`, `ai: gemini`). The Cloud Run service
+  account signs download and upload links through IAM, so no key file is needed. Set `STORAGE_BUCKET` and
+  `AI_PROVIDER=gemini` with a key.
+- **AWS, Azure, Oracle Cloud.** The image runs there too (Lambda, Container Apps, a VM with Caddy). Only the `gcs`
+  storage driver exists, so without a bucket the app reports `storage: none`: scanning is off and manual entry,
+  the monthly report and CSV export still work. Adding a driver for another cloud's object store is the next step.
 
-| `AI_PROVIDER` | Behavior |
-| --- | --- |
-| `demo` (default) | Recorded answers from `src/lib/ai/demo.ts`; no key, no network |
-| `gemini` | Google Gemini API (`GEMINI_API_KEY`, free tier) |
-| `anthropic` | Claude (`ANTHROPIC_API_KEY`) |
+Set `MIGRATE_ON_START=true` and the server applies pending migrations before taking traffic, under a Postgres advisory
+lock so instances starting together don't race. `pnpm db:migrate` does the same by hand.
 
-With `AI_FALLBACK_TO_DEMO=true`, a quota error or outage serves the recorded answer and the UI says so.
+## 2-minute demo script
 
-### Images: `generate({ images })`
+Use the live URL. Have `public/demo-receipts/bluebird-coffee.png` on your phone or laptop.
 
-`generate()` takes an optional `images: { mimeType, data }[]` (base64 of the raw bytes, no `data:` prefix). Limits
-(`input_rejected`, checked before any network call, in every mode): at most 4 images, 5 MB each decoded
-(`MAX_IMAGE_BYTES`), 10 MB in total, MIME `image/jpeg`, `image/png`, `image/webp`, `image/heic` or `image/heif`, valid
-base64. Gemini gets one `inlineData` part per image before the text part; Anthropic gets `image` blocks and rejects
-HEIC/HEIF. `demo` answers from the task's fixture and ignores the images. Logs carry the image count and total bytes,
-never the data. Treat text inside an image as data in your system prompt, exactly like user text.
+1. **Open the landing page** (0:00). Read the "Demo data only" banner, then click Sign in and create an account.
+   *Proves: open sign-up, and the demo-data warning is shown before anyone uploads anything.*
+2. **Scan the receipt** (0:20). Go to Scan a receipt. On a phone, tap Take photo; on a laptop, Choose file and pick
+   `bluebird-coffee.png`. Watch the upload bar, then "Reading the receipt".
+   *Proves: the browser shrinks the photo and uploads straight to a private bucket, then one model call reads it.*
+3. **Review the draft** (0:50). The photo sits beside a prefilled form: Bluebird Coffee, 12.40 USD, tax 0.95, meals, with a
+   confidence badge. Change the category to something else. Point out "Nothing is saved until you press Save."
+   *Proves: the AI fills a form and the person decides.*
+4. **Save and read the month** (1:10). Press Save. The list opens on October 2026 with the new row, a total tile, and the
+   bar chart by category moved to match.
+   *Proves: money handled in cents, totals per currency, a monthly report.*
+5. **Export** (1:25). Press Export CSV and open the file.
+   *Proves: a clean export of the month.*
+6. **Privacy check** (1:35). Open the expense to see the receipt preview (a 300-second signed link). Copy the page URL, open
+   a private window, sign up a second user and paste it.
+   *Proves: someone else gets a 404, not a "forbidden" page. Admins get the same 404.*
+7. **Optional, if time allows** (1:50). Upload `landscape.png`. You get "This doesn't look like a receipt. Nothing was
+   saved." Or upload `injection.png`, a receipt that prints instructions to the AI, and check the form still needs your
+   Save.
+   *Proves: bad input and hostile text don't create expenses.*
 
-### Embeddings: `embed()`
-
-`embed({ task, texts, kind: "document" | "query" })` from `src/lib/ai` returns
-`{ vectors, provider, model, dims, demo, latencyMs }`: 768-dim, L2-normalized vectors (fits pgvector's 2,000-dim
-HNSW limit). Limits: 32 texts per call, 8,000 characters each, 64,000 in total (`input_rejected`).
-
-- `gemini` calls `batchEmbedContents` with `AI_EMBED_MODEL` (default `gemini-embedding-2`, which takes the task in
-  the text: `task: search result | query: …` / `title: none | text: …`; set `gemini-embedding-001` to use `taskType`).
-  Changing the model changes the vector space: stored vectors must be re-embedded.
-- `demo` (and a missing key, or a provider failure while `AI_FALLBACK_TO_DEMO=true`) uses deterministic hashed
-  bag-of-words vectors, model `demo-hash-768`: lexical but meaningful, offline.
-- `AI_PROVIDER=anthropic` has no embeddings API, so it embeds with Gemini if `GEMINI_API_KEY` is set, else demo.
-- Always store `model` with each vector and only compare vectors with the same model; a demo fallback reports
-  `demo: true` and the demo model name so vector spaces are never mixed.
-- `AI_TIMEOUT_MS` (default 20000, max 22000) bounds every provider call, `generate()` and `embed()` alike.
-- Logs carry task, provider, model, count and latency, never the text.
+If the live model is over its free quota, step 3 shows a "Demo AI" badge and the recorded Bluebird answer instead. That
+is the fallback working, and the form says so.
