@@ -36,6 +36,19 @@ function createAuth() {
     advanced: {
       useSecureCookies: e.APP_URL.startsWith("https://"),
     },
+    // Removing a user (the admin plugin's remove-user included) deletes their receipt images first:
+    // the database cascade alone would orphan the files. If storage fails the removal is aborted
+    // (the error propagates), so no user row is lost while files remain.
+    databaseHooks: {
+      user: {
+        delete: {
+          before: async (u) => {
+            const { purgeUserReceipts } = await import("@/lib/receipts");
+            await purgeUserReceipts(u.id);
+          },
+        },
+      },
+    },
     plugins: [admin({ defaultRole: "user", adminRoles: ["admin"] }), nextCookies()],
   });
 }

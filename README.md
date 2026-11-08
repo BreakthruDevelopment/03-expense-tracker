@@ -16,6 +16,28 @@ Storage: `src/lib/storage` has a `gcs` driver (V4 signed URLs signed through IAM
 driver for development and CI (HMAC-signed URLs served by `/api/storage/local/...`) and a `none` driver (scanning off).
 `STORAGE_BUCKET` selects `gcs`; unset means `local` outside production.
 
+API (all owner-only: another user's, and admin's, request for an expense or receipt is a 404; cookie mutations need
+our own `Origin`; JSON bodies are capped at 16 KB):
+
+| Route | What it does |
+| --- | --- |
+| `GET/POST /api/expenses` | List own (`month=YYYY-MM`, `category`, `page`, `pageSize`); create. `amount` and `tax` are strings like `"12.40"`, stored as integer minor units. `receiptId` attaches the caller's own `ready` draft |
+| `GET/PATCH/DELETE /api/expenses/[id]` | PATCH needs the `updatedAt` you loaded (409 when stale); DELETE removes the image first |
+| `GET /api/expenses/summary?month=` | Totals by category, per currency |
+| `GET /api/expenses/export.csv?from=&to=` | Own rows only (at most 5,000); cells starting with `= + - @`, tab or CR get a leading `'` |
+| `POST /api/receipts/uploads` | `{contentType, sizeBytes}` returns `{receiptId, url, method: "PUT", headers, expiresAt}` |
+| `POST /api/receipts/[id]/confirm` | Reads the object back, checks real size and magic bytes (JPEG, PNG, WebP); a wrong file is deleted (422) |
+| `GET /api/receipts/[id]/url` | Fresh 300-second signed download URL |
+| `DELETE /api/receipts/[id]` | Discard a draft (object, then row) |
+| `GET /api/admin/stats`, `POST /api/admin/users/[id]/purge-receipts` | Admin: aggregate counts and caps; delete one user's images |
+
+**Upload flow.** `POST /api/receipts/uploads`, then `PUT` the file to `url`, then `POST /api/receipts/[id]/confirm`.
+The browser must send exactly the returned `headers` on the PUT: `Content-Type` and `x-goog-content-length-range`
+(`1,<sizeBytes>`) are part of the signature, so any other type, or a body outside that size range, is refused by
+storage with a 400. Caps (all fail closed): 30 receipts per user, 20 uploads per user per hour, 100 uploads a day
+app-wide, `STORAGE_MAX_BYTES` stored in total (real sizes after confirm). Unconfirmed uploads older than an hour and
+unused drafts older than a day are swept; removing a user (admin plugin included) deletes their images first.
+
 ## Architecture
 
 ```

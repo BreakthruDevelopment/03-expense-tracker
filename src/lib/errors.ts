@@ -40,3 +40,10 @@ export class TooManyRequestsError extends HttpError {
     super(429, message);
   }
 }
+
+/** The request is well formed but the content is unacceptable (for example a file that isn't the image it claims to be). */
+export class UnprocessableError extends HttpError {
+  constructor(message = "Unprocessable") {
+    super(422, message);
+  }
+}
