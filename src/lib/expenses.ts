@@ -166,6 +166,16 @@ export async function deleteExpense(actor: Actor, id: string): Promise<void> {
   await db().delete(expense).where(ownedBy(expense, actor, eq(expense.id, expenseId)));
 }
 
+/** How many of the actor's expenses in `month` (YYYY-MM) came from a scanned receipt. */
+export async function countReceiptExpenses(actor: Actor, month: unknown): Promise<number> {
+  const b = monthBounds(monthSchema.parse(month));
+  const [{ n }] = await db()
+    .select({ n: count() })
+    .from(expense)
+    .where(ownedBy(expense, actor, eq(expense.source, "receipt"), gte(expense.spentOn, b.start), lt(expense.spentOn, b.next)));
+  return n;
+}
+
 export type MonthlySummary = {
   month: string;
   currencies: { currency: string; totalMinor: number; total: string; count: number; categories: { category: string; totalMinor: number; total: string; count: number }[] }[];
