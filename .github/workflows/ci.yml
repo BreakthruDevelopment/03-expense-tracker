@@ -55,9 +55,14 @@ jobs:
         run: |
           cp -r public .next/standalone/
           cp -r .next/static .next/standalone/.next/
-          PORT=3000 HOSTNAME=127.0.0.1 nohup node .next/standalone/server.js > app.log 2>&1 &
+          # The built app runs in production mode, which has no storage driver. This flag turns on the
+          # local one (refused unless APP_URL is http on localhost) so smoke exercises the receipt upload.
+          STORAGE_ALLOW_LOCAL=true STORAGE_LOCAL_DIR=/tmp/smoke-uploads PORT=3000 HOSTNAME=127.0.0.1 nohup node .next/standalone/server.js > app.log 2>&1 &
           for i in $(seq 1 30); do curl -fsS localhost:3000/api/health && break; sleep 1; done
+          curl -fsS localhost:3000/api/health || { tail -50 app.log; exit 1; }
       - name: End-to-end smoke test
+        env:
+          REQUIRE_RECEIPTS: "1"
         run: bash scripts/smoke.sh
       - name: App log on failure
         if: failure()

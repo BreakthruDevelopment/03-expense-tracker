@@ -1,0 +1,3 @@
+# One line: the deployed https URL that live-smoke.yml tests when a claude/live-smoke* branch is pushed.
+# Update it if the app moves to its app3 domain (issue 10), e.g. https://app3.breakthruventures.ai
+https://expense-tracker-189497094271.us-central1.run.app

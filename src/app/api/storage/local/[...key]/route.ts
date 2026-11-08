@@ -1,6 +1,5 @@
 import { MAX_RECEIPT_BYTES } from "@/lib/domain";
 import { BadRequestError, NotFoundError, PayloadTooLargeError } from "@/lib/errors";
-import { env } from "@/lib/env";
 import { errorResponse, readBodyCapped } from "@/lib/http";
 import { inlineDisposition, storage } from "@/lib/storage";
 import { checkLocalUrlRequest } from "@/lib/storage/local-route";
@@ -9,10 +8,10 @@ export const dynamic = "force-dynamic";
 
 /**
  * The local driver's stand-in for a Cloud Storage signed URL. The signature is the only
- * credential, exactly as with GCS. Not available in production or with another driver.
+ * credential, exactly as with GCS. Only answers when the local driver is active (never in a deployment).
  */
 function guard() {
-  if (env().NODE_ENV === "production" || storage().kind !== "local") throw new NotFoundError();
+  if (storage().kind !== "local") throw new NotFoundError();
 }
 
 export async function PUT(request: Request, ctx: RouteContext<"/api/storage/local/[...key]">) {
