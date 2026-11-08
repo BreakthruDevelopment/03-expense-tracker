@@ -124,6 +124,13 @@ else
   pass "receipt upload, confirm, signed URL and delete"
 fi
 
+# B opens A's real expense page: 404, same as a missing one (it must not leak that the row exists).
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR_B" "$BASE_URL/expenses/$EXPENSE_ID")
+[ "$code" = "404" ] || fail "another user's expense page should be 404, got $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR_A" "$BASE_URL/expenses/$EXPENSE_ID")
+[ "$code" = "200" ] || fail "owner's expense page should be 200, got $code"
+pass "expense page is owner-only"
+
 out=$(req "$JAR_A" DELETE "/api/expenses/$EXPENSE_ID")
 [ "$(status "$out")" = "204" ] || fail "delete expense: $out"
 out=$(req "$JAR_A" GET "/api/expenses/$EXPENSE_ID")

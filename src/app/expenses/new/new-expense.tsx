@@ -5,7 +5,7 @@ import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from "re
 import { ExpenseFields, type ExpenseValues, bodyFromValues, emptyValues, valuesFromForm } from "@/components/expenses/expense-fields";
 import { DemoBadge, Panel, StatusBadge, buttonOutlineAccent, buttonPrimary, buttonSecondary } from "@/components/ui";
 import { sendJson } from "@/lib/client-api";
-import { ImageDecodeError, putWithProgress, resizeToJpeg, type UploadTicket } from "@/lib/client-image";
+import { ImageDecodeError, ImageTooLargeError, putWithProgress, resizeToJpeg, type UploadTicket } from "@/lib/client-image";
 import type { ReceiptExtraction } from "@/lib/extract-receipt";
 
 /** The extract route answers within 25 s; give the network a little more before giving up. */
@@ -50,6 +50,7 @@ export function NewExpense({ scanEnabled }: { scanEnabled: boolean }) {
   const [phase, setPhase] = useState<Phase>({ k: "choose" });
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const blobRef = useRef<Blob | null>(null);
+  const uploadAbort = useRef<AbortController | null>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const tabRefs = useRef<Record<Tab, HTMLButtonElement | null>>({ scan: null, manual: null });
@@ -64,6 +65,11 @@ export function NewExpense({ scanEnabled }: { scanEnabled: boolean }) {
       if (previewUrl) URL.revokeObjectURL(previewUrl);
     };
   }, [previewUrl]);
+
+  // Leaving the page mid-upload stops the transfer; the upload's own catch then discards the draft.
+  useEffect(() => {
+    return () => uploadAbort.current?.abort();
+  }, []);
 
   const resetForm = useCallback(() => {
     setFormError("");
@@ -126,24 +132,39 @@ export function NewExpense({ scanEnabled }: { scanEnabled: boolean }) {
 
   const upload = useCallback(
     async (blob: Blob) => {
+      const ctrl = new AbortController();
+      uploadAbort.current = ctrl;
       setPhase({ k: "uploading", pct: 0 });
-      const init = await sendJson("POST", "/api/receipts/uploads", { contentType: "image/jpeg", sizeBytes: blob.size });
+      const init = await sendJson("POST", "/api/receipts/uploads", { contentType: "image/jpeg", sizeBytes: blob.size }, ctrl.signal);
+      if (ctrl.signal.aborted) {
+        // Cancelled while the ticket was being made: give the reservation back.
+        if (init.ok) void discard((init.data as UploadTicket).receiptId);
+        return;
+      }
       if (!init.ok) {
         setPhase({ k: "error", title: "Couldn't start the upload", message: init.message, retryUpload: init.status === 0 });
         return;
       }
       const ticket = init.data as UploadTicket;
       try {
-        await putWithProgress(ticket, blob, (f) => setPhase({ k: "uploading", pct: Math.round(f * 100) }));
+        await putWithProgress(ticket, blob, (f) => setPhase({ k: "uploading", pct: Math.round(f * 100) }), ctrl.signal);
       } catch {
         void discard(ticket.receiptId);
-        setPhase({ k: "error", title: "Upload failed", message: "The photo didn't upload. Check your connection and try again.", retryUpload: true });
+        // A cancel (or leaving the page) has already moved on; only a real failure shows an error.
+        if (!ctrl.signal.aborted) {
+          setPhase({ k: "error", title: "Upload failed", message: "The photo didn't upload. Check your connection and try again.", retryUpload: true });
+        }
         return;
       }
       await extract(ticket.receiptId);
     },
     [discard, extract],
   );
+
+  function cancelUpload() {
+    uploadAbort.current?.abort();
+    clearScan();
+  }
 
   async function onPick(file: File | undefined) {
     if (!file) return;
@@ -158,7 +179,12 @@ export function NewExpense({ scanEnabled }: { scanEnabled: boolean }) {
       setPhase({
         k: "error",
         title: "Couldn't open that image",
-        message: err instanceof ImageDecodeError || err instanceof DOMException ? "Try a JPEG, PNG or WebP photo." : "Something went wrong preparing the photo. Try again.",
+        message:
+          err instanceof ImageTooLargeError
+            ? "That file is larger than 25 MB. Choose a smaller photo."
+            : err instanceof ImageDecodeError || err instanceof DOMException
+              ? "Try a JPEG, PNG or WebP photo."
+              : "Something went wrong preparing the photo. Try again.",
         chooseAgain: true,
       });
     }
@@ -261,7 +287,7 @@ export function NewExpense({ scanEnabled }: { scanEnabled: boolean }) {
             <input
               ref={cameraRef}
               type="file"
-              accept="image/*"
+              accept="image/jpeg,image/png,image/webp"
               capture="environment"
               className="sr-only"
               tabIndex={-1}
@@ -325,6 +351,11 @@ export function NewExpense({ scanEnabled }: { scanEnabled: boolean }) {
                       <span aria-hidden className="size-5 animate-spin rounded-full border-2 border-border-strong border-t-accent" />
                       {phase.k === "resizing" ? "Preparing your photo…" : "Reading the receipt. This can take up to 25 seconds."}
                     </p>
+                  )}
+                  {phase.k === "uploading" && (
+                    <button type="button" className={`${buttonSecondary} w-full sm:w-auto`} onClick={cancelUpload}>
+                      Cancel upload
+                    </button>
                   )}
                   {previewUrl && (
                     // A local blob URL of the photo the user just chose; nothing to optimise.
@@ -494,8 +525,8 @@ function Review({
             <div role="status" className="rounded-card border border-border bg-building-soft px-3 py-2 text-sm text-building">
               <p className="font-semibold">Check before saving</p>
               <ul className="mt-1 list-disc space-y-1 pl-5">
-                {extraction.warnings.map((w) => (
-                  <li key={w.code} className="break-words">
+                {extraction.warnings.map((w, i) => (
+                  <li key={i} className="break-words">
                     {w.message}
                   </li>
                 ))}

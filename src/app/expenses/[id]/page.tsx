@@ -52,7 +52,7 @@ export default async function ExpensePage({ params }: { params: Promise<{ id: st
           receiptId: expense.receiptId,
         }}
         receiptUrl={receiptUrl}
-        demoBadge={isDemoEmail(user.email) || expense.aiMode === "demo" ? (expense.aiMode === "demo" ? "Demo AI" : "Demo data") : null}
+        demoBadge={expense.aiMode === "demo" ? "Demo AI" : isDemoEmail(user.email) ? "Demo data" : null}
       />
     </>
   );

@@ -5,7 +5,7 @@ import { type Column, DataList, PageIntro, Panel, StatGrid, StatTile } from "@/c
 import { requireRoleOrRedirect } from "@/lib/auth/session";
 import { formatBytes } from "@/lib/format";
 import { log } from "@/lib/log";
-import { type AdminStats, type AdminUserUsage, adminStats, adminUserUsage } from "@/lib/receipts";
+import { type AdminStats, type AdminUserUsage, adminStats, adminUserUsage, sweepStaleReceipts } from "@/lib/receipts";
 
 export const metadata: Metadata = { title: "Admin" };
 export const dynamic = "force-dynamic";
@@ -40,6 +40,7 @@ function Meter({ label, value, cap, format = (n: number) => nf.format(n) }: { la
 
 export default async function AdminPage() {
   const admin = await requireRoleOrRedirect("admin");
+  await sweepStaleReceipts().catch((err) => log.warn("receipt.sweep_failed", { error: err instanceof Error ? err.message : "unknown" }));
 
   let stats: AdminStats | null = null;
   let users: AdminUserUsage[] = [];

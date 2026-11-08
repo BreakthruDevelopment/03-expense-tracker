@@ -3,16 +3,30 @@
 export const MAX_EDGE = 1600;
 const JPEG_QUALITY = 0.85;
 
+/** Refuse anything bigger before decoding it: a huge file can exhaust a phone's memory. */
+export const MAX_INPUT_BYTES = 25 * 1024 * 1024;
+/** Above this size the file is probably larger than 1600 px, so ask the decoder to shrink while decoding. */
+const HINT_RESIZE_BYTES = 1024 * 1024;
+
 export class ImageDecodeError extends Error {}
+export class ImageTooLargeError extends Error {}
 
 async function decode(file: Blob): Promise<{ source: CanvasImageSource; width: number; height: number; close: () => void }> {
   if (typeof createImageBitmap === "function") {
-    try {
-      // Applies the photo's EXIF rotation, so a phone portrait isn't sideways after re-encoding.
-      const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
-      return { source: bmp, width: bmp.width, height: bmp.height, close: () => bmp.close() };
-    } catch {
-      // Fall through to the <img> path.
+    // Applies the photo's EXIF rotation, so a phone portrait isn't sideways after re-encoding.
+    // For big files the width hint makes the decoder shrink while decoding (the aspect ratio is kept);
+    // the canvas below does the exact fit, and browsers that reject the options get a plain decode.
+    const attempts: ImageBitmapOptions[] =
+      file.size > HINT_RESIZE_BYTES
+        ? [{ imageOrientation: "from-image", resizeWidth: MAX_EDGE, resizeQuality: "high" }, { imageOrientation: "from-image" }]
+        : [{ imageOrientation: "from-image" }];
+    for (const options of attempts) {
+      try {
+        const bmp = await createImageBitmap(file, options);
+        return { source: bmp, width: bmp.width, height: bmp.height, close: () => bmp.close() };
+      } catch {
+        // Try the next option set, then the <img> path.
+      }
     }
   }
   const url = URL.createObjectURL(file);
@@ -21,16 +35,17 @@ async function decode(file: Blob): Promise<{ source: CanvasImageSource; width: n
     img.decoding = "async";
     img.src = url;
     await img.decode();
-    return { source: img, width: img.naturalWidth, height: img.naturalHeight, close: () => undefined };
+    // The URL stays alive until the caller has drawn the image and calls close().
+    return { source: img, width: img.naturalWidth, height: img.naturalHeight, close: () => URL.revokeObjectURL(url) };
   } catch {
-    throw new ImageDecodeError("decode failed");
-  } finally {
     URL.revokeObjectURL(url);
+    throw new ImageDecodeError("decode failed");
   }
 }
 
 /** Resize to at most 1600 px on the long edge and re-encode as JPEG (which also drops EXIF and GPS data). */
 export async function resizeToJpeg(file: Blob): Promise<Blob> {
+  if (file.size > MAX_INPUT_BYTES) throw new ImageTooLargeError("file too large");
   const img = await decode(file);
   try {
     if (!img.width || !img.height) throw new ImageDecodeError("empty image");
@@ -57,9 +72,17 @@ export async function resizeToJpeg(file: Blob): Promise<Blob> {
 export type UploadTicket = { receiptId: string; url: string; method: string; headers: Record<string, string> };
 
 /** PUT with XHR (fetch can't report upload progress), sending exactly the headers the server signed. */
-export function putWithProgress(ticket: UploadTicket, body: Blob, onProgress: (fraction: number) => void): Promise<void> {
+export function putWithProgress(
+  ticket: UploadTicket,
+  body: Blob,
+  onProgress: (fraction: number) => void,
+  signal?: AbortSignal,
+): Promise<void> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException("aborted", "AbortError"));
     const xhr = new XMLHttpRequest();
+    signal?.addEventListener("abort", () => xhr.abort(), { once: true });
+    xhr.onabort = () => reject(new DOMException("aborted", "AbortError"));
     xhr.open(ticket.method, ticket.url);
     for (const [name, value] of Object.entries(ticket.headers)) xhr.setRequestHeader(name, value);
     xhr.upload.onprogress = (e) => {
