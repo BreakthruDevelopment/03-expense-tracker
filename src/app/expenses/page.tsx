@@ -17,7 +17,7 @@ import {
 import { requireUserOrRedirect } from "@/lib/auth/session";
 import { isDemoEmail } from "@/lib/demo-identity";
 import { CATEGORIES } from "@/lib/domain";
-import { type ExpenseView, listExpenses, monthlySummary } from "@/lib/expenses";
+import { type ExpenseView, countReceiptExpenses, listExpenses, monthlySummary } from "@/lib/expenses";
 import { monthSchema } from "@/lib/expense-schemas";
 import { categoryLabel, currentMonth, formatDay, formatMoney, monthLabel, monthRange, shiftMonth } from "@/lib/format";
 import { CategoryChart } from "./category-chart";
@@ -31,7 +31,8 @@ type SearchParams = Record<string, string | string[] | undefined>;
 
 /** Filters live in the URL. A bad value falls back to the default instead of failing the page. */
 const filtersSchema = z.object({
-  month: monthSchema.catch(currentMonth()),
+  // A function, so the default is computed per request (the current month in UTC), not once at module load.
+  month: monthSchema.catch(() => currentMonth()),
   category: z.enum(CATEGORIES).optional().catch(undefined),
   page: z.coerce.number().int().min(1).max(10_000).catch(1),
 });
@@ -53,17 +54,6 @@ function href(month: string, category: string | undefined, page: number) {
   return `/expenses?${p}`;
 }
 
-/** Every row of the month, for the "receipts scanned" tile. A user keeps at most 500 expenses. */
-async function countReceipts(user: Awaited<ReturnType<typeof requireUserOrRedirect>>, month: string): Promise<number> {
-  let n = 0;
-  for (let page = 1; page <= 10; page++) {
-    const batch = await listExpenses(user, month, undefined, page, 100);
-    n += batch.items.filter((e) => e.source === "receipt").length;
-    if (page * batch.pageSize >= batch.total) break;
-  }
-  return n;
-}
-
 export default async function ExpensesPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const user = await requireUserOrRedirect();
   const sp = await searchParams;
@@ -77,7 +67,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
   const [summary, list, receipts] = await Promise.all([
     monthlySummary(user, month),
     listExpenses(user, month, category, page, PAGE_SIZE),
-    countReceipts(user, month),
+    countReceiptExpenses(user, month),
   ]);
   const pages = Math.max(1, Math.ceil(list.total / PAGE_SIZE));
   if (page > pages) redirect(href(month, category, pages));

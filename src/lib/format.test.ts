@@ -5,6 +5,9 @@ describe("format", () => {
   it("formats integer cents per currency", () => {
     expect(formatMoney(1240, "USD")).toBe("$12.40");
     expect(formatMoney(4180, "EUR")).toBe("€41.80");
+    expect(formatMoney(1999, "CHF")).toMatch(/^CHF\s19\.99$/);
+    expect(formatMoney(50000, "INR")).toBe("₹500.00");
+    expect(formatMoney(12345, "MXN")).toBe("MX$123.45");
     expect(formatMoney(100_000_000, "USD")).toBe("$1,000,000.00");
   });
   it("handles months", () => {

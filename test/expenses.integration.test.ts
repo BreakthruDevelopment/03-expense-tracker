@@ -184,6 +184,21 @@ describe.skipIf(!url)("expenses and receipts data layer (Postgres, local storage
       expect(s.currencies.find((c) => c.currency === "EUR")).toMatchObject({ total: "20.00", count: 1 });
     });
 
+    it("counts only the actor's own receipt-sourced expenses in the month", async () => {
+      const a1 = await draft(alice);
+      const a2 = await draft(alice);
+      const b1 = await draft(bob);
+      await ex.createExpense(alice, input({ receiptId: a1 }));
+      await ex.createExpense(alice, input({ receiptId: a2, spentOn: "2026-09-30" }));
+      await ex.createExpense(alice, input({ merchant: "Typed by hand" }));
+      await ex.createExpense(bob, input({ receiptId: b1 }));
+      expect(await ex.countReceiptExpenses(alice, "2026-10")).toBe(1);
+      expect(await ex.countReceiptExpenses(alice, "2026-09")).toBe(1);
+      expect(await ex.countReceiptExpenses(bob, "2026-10")).toBe(1);
+      expect(await ex.countReceiptExpenses(admin, "2026-10")).toBe(0);
+      await expect(ex.countReceiptExpenses(alice, "2026-13")).rejects.toThrow();
+    });
+
     it("caps expenses at 500 per user", async () => {
       await sql`insert into expense (owner_id, merchant, spent_on, amount_minor) select ${alice.id}, 'm', '2026-10-01', 100 from generate_series(1, 500)`;
       await expect(ex.createExpense(alice, input())).rejects.toMatchObject({ status: 409 });

@@ -1,8 +1,9 @@
 import type { Category } from "@/lib/domain";
 
-/** Money is stored as integer minor units (every supported currency has two decimals). Display only. */
+/** Money is stored as integer minor units (the divisor comes from the currency's own fraction digits). Display only. */
 export function formatMoney(minor: number, currency: string): string {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(minor / 100);
+  const nf = new Intl.NumberFormat("en-US", { style: "currency", currency });
+  return nf.format(minor / 10 ** (nf.resolvedOptions().maximumFractionDigits ?? 2));
 }
 
 export const CATEGORY_LABELS: Record<Category, string> = {

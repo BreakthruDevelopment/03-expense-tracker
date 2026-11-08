@@ -25,7 +25,7 @@ export function CategoryChart({ currency }: { currency: Currency }) {
               </span>
               <span className="col-start-2 text-sm font-medium tabular-nums sm:col-start-3 sm:row-start-1 sm:text-right">
                 {formatMoney(c.totalMinor, currency.currency)}
-                <span className="font-normal text-muted"> · {c.count}</span>
+                <span className="font-normal text-muted"> · {c.count} {c.count === 1 ? "expense" : "expenses"}</span>
               </span>
             </li>
           );
