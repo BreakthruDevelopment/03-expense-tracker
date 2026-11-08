@@ -17,4 +17,20 @@ describe("local driver policy", () => {
     }
     expect(isLoopbackUrl("http://localhost:3000")).toBe(true);
   });
+  it("refuses credentials, tricks and non-loopback IPv6 forms", () => {
+    expect(isLoopbackUrl("http://127.0.0.1@evil.test")).toBe(false);
+    expect(isLoopbackUrl("http://localhost:x@evil.test")).toBe(false);
+    expect(isLoopbackUrl("http://user:pw@localhost:3000")).toBe(false);
+    expect(isLoopbackUrl("http://[::ffff:127.0.0.1]:3000")).toBe(false);
+  });
+  it("accepts uppercase and IPv6 loopback spellings", () => {
+    expect(isLoopbackUrl("HTTP://LOCALHOST:3000")).toBe(true);
+    expect(isLoopbackUrl("http://[::1]:3000")).toBe(true);
+  });
+  it("refuses when CLOUD names a deployment", () => {
+    const base = { nodeEnv: "production", allowLocal: true, appUrl: "http://localhost:3000" };
+    expect(localDriverAllowed({ ...base, cloud: "gcp" })).toBe(false);
+    expect(localDriverAllowed({ ...base, cloud: "local" })).toBe(true);
+    expect(localDriverAllowed({ ...base })).toBe(true);
+  });
 });

@@ -4,7 +4,7 @@ name: Live smoke test
 # real bucket, extract (live or demo), CSV and cleanup. Two ways to point it at a URL:
 #   - Actions tab > Run workflow, and type the base URL; or
 #   - push a claude/live-smoke* branch that has the URL in .github/live-smoke-url (one line).
-# There is no default URL until the app is deployed (issue 10): the run.app or app3 URL goes there.
+# .github/live-smoke-url holds the current run.app URL; change it when the app moves to its app3 domain.
 on:
   workflow_dispatch:
     inputs:
@@ -24,12 +24,14 @@ jobs:
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - name: Pick the URL to test
         id: url
         env:
           INPUT_URL: ${{ inputs.base_url }}
         run: |
-          url="${INPUT_URL:-}"
+          url="$(printf '%s' "${INPUT_URL:-}" | tr -d '[:space:]')"
           if [ -z "$url" ] && [ -f .github/live-smoke-url ]; then
             url="$(grep -v '^[[:space:]]*#' .github/live-smoke-url | head -n1 | tr -d '[:space:]')"
           fi
@@ -37,10 +39,10 @@ jobs:
             echo "::error::No URL. Pass base_url, or put the deployed URL in .github/live-smoke-url."
             exit 1
           fi
-          case "$url" in
-            https://*) ;;
-            *) echo "::error::The live URL must start with https://"; exit 1 ;;
-          esac
+          if ! [[ "$url" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]]; then
+            echo "::error::The live URL must look like https://host[:port]"
+            exit 1
+          fi
           echo "url=${url%/}" >> "$GITHUB_OUTPUT"
           echo "Testing ${url%/}" >> "$GITHUB_STEP_SUMMARY"
       - name: Smoke test the live site

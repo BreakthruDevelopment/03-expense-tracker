@@ -20,7 +20,7 @@ export function storage(): StorageDriver {
   if (!cached) {
     const e = env();
     if (e.STORAGE_BUCKET) cached = createGcsDriver({ bucket: e.STORAGE_BUCKET });
-    else if (localDriverAllowed({ nodeEnv: e.NODE_ENV, allowLocal: e.STORAGE_ALLOW_LOCAL, appUrl: e.APP_URL })) {
+    else if (localDriverAllowed({ nodeEnv: e.NODE_ENV, allowLocal: e.STORAGE_ALLOW_LOCAL, appUrl: e.APP_URL, cloud: process.env.CLOUD })) {
       cached = createLocalDriver({
         allowInProduction: e.STORAGE_ALLOW_LOCAL,
         dir: e.STORAGE_LOCAL_DIR,
@@ -29,7 +29,7 @@ export function storage(): StorageDriver {
         nodeEnv: e.NODE_ENV,
       });
     } else if (e.STORAGE_ALLOW_LOCAL) {
-      throw new Error("STORAGE_ALLOW_LOCAL is refused: APP_URL must be http on localhost.");
+      throw new Error("STORAGE_ALLOW_LOCAL is refused: APP_URL must be http on localhost and CLOUD must be unset or local.");
     } else cached = createNoneDriver();
   }
   return cached;
