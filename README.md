@@ -83,6 +83,18 @@ pnpm dev                             # http://localhost:3000
 To make yourself an admin: sign up, then `SEED_ADMIN_EMAIL=you@example.com SEED_ADMIN_PASSWORD=... pnpm db:seed`
 while the app is running.
 
+### Demo data
+
+Three demo users (Ada, Ben, Cleo at `@demo.breakthru.test`) own 30 fictional expenses over the last three months;
+five have a synthetic receipt image (`public/demo-receipts/`, drawn by `pnpm demo:receipts`) and a pre-filled
+extraction with `extraction_mode = demo`, so no model call is made.
+
+- Locally: `DEMO_SEED=yes APP_URL=http://localhost:3000 DEMO_PASSWORD=<10+ chars> pnpm seed:demo` (Ada becomes an admin
+  and all three get that password). It refuses a production `APP_URL` (`app3.breakthruventures.ai`, `*.run.app`,
+  `*.azurecontainerapps.io`) or Azure database host.
+- Live: an admin posts to `POST /api/admin/demo` (no body, same-origin; 1 per minute and 5 per day app-wide). Demo users
+  get random passwords nobody knows. Either way, a reload replaces only the demo users' expenses and receipt objects.
+
 ## Design system
 
 Every app shares the Breakthru look (guide and concept: `ai-dev-os/design/`). Tokens live in `src/app/globals.css`

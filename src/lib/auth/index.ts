@@ -6,6 +6,7 @@ import { APIError, createAuthMiddleware, getAuthoritativeSessionFromCtx } from "
 import { admin } from "better-auth/plugins";
 import { z } from "zod";
 import { db, schema } from "@/lib/db";
+import { isDemoEmail, MARKER } from "@/lib/demo-identity";
 import { env } from "@/lib/env";
 import { log } from "@/lib/log";
 
@@ -41,6 +42,18 @@ const purgeBeforeRemoveUser = createAuthMiddleware(async (ctx) => {
     throw new APIError("BAD_GATEWAY", { message: "Receipt storage failed, so the user was not removed. Try again shortly." });
   }
 });
+
+/**
+ * Demo identities are created only by the server-side loader (no HTTP request in the endpoint
+ * context). Any request-driven create or update, such as public sign-up or update-user, cannot use a
+ * demo address or the demo marker.
+ */
+function rejectDemoIdentity(data: Record<string, unknown>, ctx: { request?: Request } | null | undefined) {
+  if (!ctx?.request) return;
+  if (isDemoEmail(data.email) || data.image === MARKER) {
+    throw new APIError("BAD_REQUEST", { message: "That email or image is reserved." });
+  }
+}
 
 function createAuth() {
   const e = env();
@@ -80,6 +93,8 @@ function createAuth() {
     // is what keeps the admin path atomic.
     databaseHooks: {
       user: {
+        create: { before: async (user, ctx) => void rejectDemoIdentity(user, ctx) },
+        update: { before: async (data, ctx) => void rejectDemoIdentity(data, ctx) },
         delete: {
           before: async (u) => {
             const { purgeUserReceipts } = await import("@/lib/receipts");
