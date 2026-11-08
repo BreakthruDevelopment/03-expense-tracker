@@ -12,6 +12,10 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts", "test/**/*.test.ts"],
+    globalSetup: ["test/global-setup.ts"],
+    // The integration files share one database; run files one at a time so they can't
+    // see each other's rows mid-test.
+    fileParallelism: false,
     coverage: { provider: "v8", include: ["src/lib/**"] },
   },
 });

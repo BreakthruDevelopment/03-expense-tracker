@@ -1,4 +1,4 @@
-# 30 Apps Template
+# Expense Tracker
 
 The starting point for every app in Breakthru Ventures' **30 apps in 30 days** portfolio. Each app is a
 responsive web app with a Postgres database, sign-in with roles, one AI feature, and a single container
@@ -8,8 +8,13 @@ image that deploys to AWS, Azure, Google Cloud or Oracle Cloud.
 
 _Each app replaces this section: the customer problem, who uses it, and what the AI feature does._
 
-The template ships an example "items" feature: users manage their own items, admins see everyone's, and
-an AI summary describes the list.
+Users photograph receipts, review what the AI read from them and keep a monthly expense report. Receipt images are
+private files in a Cloud Storage bucket (signed URLs only), and nothing is saved until the user confirms.
+_This section is expanded by the docs issue; the data layer and storage module are in place._
+
+Storage: `src/lib/storage` has a `gcs` driver (V4 signed URLs signed through IAM `signBlob`, no key files), a `local`
+driver for development and CI (HMAC-signed URLs served by `/api/storage/local/...`) and a `none` driver (scanning off).
+`STORAGE_BUCKET` selects `gcs`; unset means `local` outside production.
 
 ## Architecture
 
@@ -63,8 +68,8 @@ IBM Plex Mono (`font-mono`). Set the app's name once in `src/lib/app-config.ts` 
 | `Panel` | `src/components/ui/` | Titled panel; `collapsible` adds a "Show all" toggle (small client component) |
 | `DemoBadge` | `src/components/ui/` | "Demo data" label for seeded or demo content |
 
-The header links come from `NAV_LINKS` in `src/lib/app-config.ts`; each app must edit that list (the template's
-`/dashboard` and `/admin` links break if the app deletes those pages).
+The header links come from `NAV_LINKS` in `src/lib/app-config.ts`; each app must edit that list (links break if the
+app deletes those pages).
 
 Shared button and field classes are in `src/components/ui/styles.ts` (44px minimum height). Don't add `loading.tsx` or
 `<Suspense>` above a page that calls `requireRoleOrRedirect()` or `notFound()`.

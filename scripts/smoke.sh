@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end smoke test against a running app (local, CI, or a deployed URL).
-# Signs up two users over HTTP and proves one can't delete the other's item.
+# Signs up two users over HTTP and checks the signed-out redirects.
 #   BASE_URL=https://app7.breakthruventures.ai ./scripts/smoke.sh
 set -euo pipefail
 
@@ -14,6 +14,7 @@ pass() { echo "ok - $*"; }
 
 health=$(curl -fsS "$BASE_URL/api/health") || fail "health endpoint unreachable"
 echo "$health" | grep -q '"status":"ok"' || fail "health not ok: $health"
+echo "$health" | grep -Eq '"storage":"(gcs|local|none)"' || fail "health is missing the storage driver: $health"
 pass "health check"
 
 for path in / /sign-in; do
@@ -22,11 +23,11 @@ for path in / /sign-in; do
 done
 pass "pages render inside the shared shell"
 
-for path in /dashboard /admin; do
+for path in /expenses /admin; do
   code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL$path")
   [ "$code" = "307" ] || fail "signed-out $path should redirect (307), got $code"
 done
-pass "signed-out dashboard and admin redirect"
+pass "signed-out expenses and admin redirect"
 
 signup() {
   local jar=$1 email=$2
@@ -39,26 +40,5 @@ signup "$JAR_A" "smoke-a-$RUN_ID@example.test"
 signup "$JAR_B" "smoke-b-$RUN_ID@example.test"
 pass "two users signed up"
 
-code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/api/items")
-[ "$code" = "401" ] || fail "anonymous list should be 401, got $code"
-pass "anonymous access refused"
-
-item=$(curl -fsS -b "$JAR_A" -H 'content-type: application/json' -H "origin: $BASE_URL" \
-  -d '{"title":"smoke item"}' "$BASE_URL/api/items") || fail "create item failed"
-id=$(echo "$item" | sed -E 's/.*"id":"([^"]+)".*/\1/')
-[ -n "$id" ] || fail "no item id in $item"
-pass "user A created an item"
-
-code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -b "$JAR_B" -H "origin: $BASE_URL" "$BASE_URL/api/items/$id")
-[ "$code" = "403" ] || fail "user B deleting A's item should be 403, got $code"
-pass "user B blocked from A's item"
-
-code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -b "$JAR_A" -H "origin: $BASE_URL" "$BASE_URL/api/ai/summarize")
-[ "$code" = "200" ] || fail "AI summary should be 200, got $code"
-pass "AI summary responds"
-
-code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -b "$JAR_A" -H "origin: $BASE_URL" "$BASE_URL/api/items/$id")
-[ "$code" = "204" ] || fail "owner delete should be 204, got $code"
-pass "owner deleted their item"
-
+# The expense flow (list, create, receipts) is added to this script with the API (spec issue 4).
 echo "SMOKE PASS"

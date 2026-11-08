@@ -4,10 +4,20 @@
  * Each app adds a fixture for each AI task it defines.
  */
 export const demoFixtures: Record<string, unknown> = {
-  "summarize-items": {
-    summary:
-      "You have a few open items. The most recent ones focus on setup work; nothing looks overdue.",
-    highlights: ["Setup tasks are the largest group", "No items are flagged urgent"],
+  // Matches the synthetic public/demo-receipts/bluebird-coffee.png.
+  "extract-receipt": {
+    isReceipt: true,
+    merchant: "Bluebird Coffee",
+    date: "2026-10-14",
+    currency: "USD",
+    total: 12.4,
+    tax: 0.95,
+    category: "meals",
+    lineItems: [
+      { description: "Oat latte", amount: 5.75 },
+      { description: "Almond croissant", amount: 5.7 },
+    ],
+    confidence: "high",
   },
 };
 
