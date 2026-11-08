@@ -274,6 +274,109 @@ describe.skipIf(!url)("receipt extraction (Postgres, local storage)", () => {
     expect((await rx.extractReceipt(alice, id)).mode).toBe("demo");
   });
 
+  it("answers a fresh running claim with 409 before re-reading the object", async () => {
+    const id = await upload(alice, PNG);
+    await sql`update receipt set extraction = jsonb_build_object('status', 'running', 'startedAt', (extract(epoch from now()) * 1000)::bigint) where id = ${id}`;
+    const read = vi.spyOn(st.storage(), "read");
+    const head = vi.spyOn(st.storage(), "head");
+    try {
+      await expect(rx.extractReceipt(alice, id)).rejects.toMatchObject({ status: 409 });
+      expect(read).not.toHaveBeenCalled();
+      expect(head).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+      head.mockRestore();
+    }
+  });
+
+  it("answers 429 at the per-user or daily cap before re-reading the object, and keeps the receipt retryable", async () => {
+    const id = await upload(alice, PNG);
+    const head = vi.spyOn(st.storage(), "head");
+    try {
+      await sql`insert into rate_event (user_id, kind) select ${alice.id}, 'extract' from generate_series(1, 10)`;
+      await expect(rx.extractReceipt(alice, id)).rejects.toMatchObject({ status: 429 });
+      await sql`delete from rate_event where user_id = ${alice.id}`;
+      process.env.EXTRACT_DAILY_CAP = "1";
+      envMod.resetEnvCache();
+      await sql`insert into daily_usage (day, kind, count) values ((now() at time zone 'utc')::date, 'extract', 1)`;
+      await expect(rx.extractReceipt(alice, id)).rejects.toMatchObject({ status: 429 });
+      expect(head).not.toHaveBeenCalled();
+    } finally {
+      head.mockRestore();
+    }
+    expect((await row(id)).extraction).toBeNull();
+  });
+
+  it("stamps the claim with the database clock, not the app's clock", async () => {
+    const id = await upload(alice, PNG);
+    let seen = 0;
+    let dbNow = 0;
+    gen().mockImplementationOnce(async (req: { schema: { parse: (v: unknown) => unknown } }) => {
+      seen = Number((await row(id)).extraction.startedAt);
+      dbNow = Number((await sql`select (extract(epoch from now()) * 1000)::bigint as t`)[0].t);
+      return { data: req.schema.parse(model), provider: "stub", model: "stub", demo: false, latencyMs: 1 };
+    });
+    // The app's clock runs one hour ahead of the database's.
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 3_600_000 });
+    try {
+      await rx.extractReceipt(alice, id);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(Math.abs(dbNow - seen)).toBeLessThan(5000);
+    expect(Math.abs(seen - (Date.now() + 3_600_000))).toBeGreaterThan(3_000_000);
+  });
+
+  it("drops the final write when another request has taken over the claim", async () => {
+    const id = await upload(alice, PNG);
+    gen().mockImplementationOnce(async (req: { schema: { parse: (v: unknown) => unknown } }) => {
+      // Simulate a takeover while this request is still waiting for the model.
+      await sql`update receipt set extraction = ${sql.json({ status: "running", startedAt: 42 })} where id = ${id}`;
+      return { data: req.schema.parse(model), provider: "stub", model: "stub", demo: false, latencyMs: 1 };
+    });
+    // The request that lost its claim doesn't return its own answer: the takeover's row is not finished, so it asks to retry.
+    await expect(rx.extractReceipt(alice, id)).rejects.toMatchObject({ status: 409 });
+    const r = await row(id);
+    expect(r.extraction_mode).toBeNull();
+    expect(r.extraction).toEqual({ status: "running", startedAt: 42 });
+  });
+
+  it("returns the stored answer when the request that took over its claim has already finished", async () => {
+    const id = await upload(alice, PNG);
+    const winner = { isReceipt: false, draft: null, confidence: "low", warnings: [] };
+    gen().mockImplementationOnce(async (req: { schema: { parse: (v: unknown) => unknown } }) => {
+      await sql`update receipt set extraction = ${sql.json(winner)}, extraction_mode = 'live' where id = ${id}`;
+      return { data: req.schema.parse(model), provider: "stub", model: "stub", demo: false, latencyMs: 1 };
+    });
+    expect(await rx.extractReceipt(alice, id)).toMatchObject({ mode: "live", extraction: winner });
+  });
+
+  it("holds the per-user hourly cap under concurrent requests: 12 parallel scans, exactly 10 run", async () => {
+    const ids = [];
+    for (let i = 0; i < 12; i++) ids.push(await upload(alice, PNG));
+    const results = await Promise.allSettled(ids.map((id) => rx.extractReceipt(alice, id)));
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(10);
+    const refused = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+    expect(refused.map((r) => r.reason.status)).toEqual([429, 429]);
+    expect((await sql`select count(*)::int as n from rate_event where user_id = ${alice.id} and kind = 'extract'`)[0].n).toBe(10);
+    expect((await sql`select count from daily_usage where kind = 'extract'`)[0].count).toBe(10);
+    expect((await sql`select count(*)::int as n from receipt where owner_id = ${alice.id} and extraction is null`)[0].n).toBe(2);
+  });
+
+  it("holds the app-wide daily cap under concurrent requests from two users: 8 parallel scans, exactly 3 run", async () => {
+    process.env.EXTRACT_DAILY_CAP = "3";
+    envMod.resetEnvCache();
+    const queued: { who: typeof alice; id: string }[] = [];
+    for (let i = 0; i < 8; i++) {
+      const who = i % 2 ? bob : alice;
+      queued.push({ who, id: await upload(who, PNG) });
+    }
+    const results = await Promise.allSettled(queued.map((q) => rx.extractReceipt(q.who, q.id)));
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(3);
+    expect((results.filter((r) => r.status === "rejected") as PromiseRejectedResult[]).every((r) => r.reason.status === 429)).toBe(true);
+    expect((await sql`select count from daily_usage where kind = 'extract'`)[0].count).toBe(3);
+  });
+
   it("logs no merchant, amount or image data", async () => {
     const id = await upload(alice, PNG);
     answer(model);

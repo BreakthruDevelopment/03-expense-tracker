@@ -42,3 +42,6 @@ export function inlineDisposition(contentType: ReceiptContentType): string {
 
 /** The size range signed into uploads; the same string is the `x-goog-content-length-range` header value. */
 export const lengthRange = (maxBytes: number) => `1,${maxBytes}`;
+
+/** Signed into every upload: Cloud Storage creates the object only if none exists, so a URL works once. */
+export const IF_GENERATION_MATCH = "x-goog-if-generation-match";

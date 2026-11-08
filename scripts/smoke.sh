@@ -104,8 +104,10 @@ else
   [ -n "$RID" ] && [ -n "$PUT_URL" ] && [ -n "$RANGE" ] || fail "upload ticket is incomplete: $out"
   JPG="$(mktemp)"; trap 'rm -f "$JAR_A" "$JAR_B" "$JPG"' EXIT
   { printf '\xff\xd8\xff\xe0'; head -c 60 /dev/zero; } > "$JPG"
-  code=$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: image/jpeg' -H "x-goog-content-length-range: $RANGE" --data-binary "@$JPG" "$PUT_URL")
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: image/jpeg' -H "x-goog-content-length-range: $RANGE" -H 'x-goog-if-generation-match: 0' --data-binary "@$JPG" "$PUT_URL")
   [ "$code" = "200" ] || fail "PUT to the signed URL should be 200, got $code"
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: image/jpeg' -H "x-goog-content-length-range: $RANGE" -H 'x-goog-if-generation-match: 0' --data-binary "@$JPG" "$PUT_URL")
+  [ "$code" = "412" ] || fail "a second PUT to the same signed URL should be 412, got $code"
   out=$(req "$JAR_B" GET "/api/receipts/$RID/url")
   [ "$(status "$out")" = "404" ] || fail "B's signed URL for A's receipt should be 404: $out"
   out=$(req "$JAR_A" POST "/api/receipts/$RID/confirm")

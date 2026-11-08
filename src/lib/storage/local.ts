@@ -4,7 +4,7 @@ import path from "node:path";
 import { ForbiddenError } from "@/lib/auth/rbac";
 import { BadRequestError } from "@/lib/errors";
 import { RECEIPT_CONTENT_TYPES, type ReceiptContentType } from "@/lib/domain";
-import { assertObjectKey, isReceiptContentType, lengthRange } from "./keys";
+import { IF_GENERATION_MATCH, assertObjectKey, isReceiptContentType, lengthRange } from "./keys";
 import {
   DOWNLOAD_TTL_SECONDS,
   type ObjectHead,
@@ -70,12 +70,13 @@ export function verifyLocalUrl(
   return params;
 }
 
-/** Validate a local PUT's headers the way GCS does. */
+/** Validate a local PUT's headers the way GCS does: every signed header must be present and exact. */
 export function checkLocalPutHeaders(p: LocalUrlParams, headers: Headers): void {
   if (headers.get("content-type")?.trim() !== p.contentType) throw new BadRequestError("Content-Type does not match the upload URL.");
   if (headers.get("x-goog-content-length-range")?.trim() !== lengthRange(p.max)) {
     throw new BadRequestError("Missing or wrong x-goog-content-length-range header.");
   }
+  if (headers.get(IF_GENERATION_MATCH)?.trim() !== "0") throw new BadRequestError(`Missing or wrong ${IF_GENERATION_MATCH} header.`);
 }
 
 export function createLocalDriver(opts: LocalOptions): StorageDriver {
@@ -123,7 +124,7 @@ export function createLocalDriver(opts: LocalOptions): StorageDriver {
       return {
         url,
         method: "PUT",
-        headers: { "Content-Type": contentType, "x-goog-content-length-range": lengthRange(maxBytes) },
+        headers: { "Content-Type": contentType, "x-goog-content-length-range": lengthRange(maxBytes), [IF_GENERATION_MATCH]: "0" },
         expiresAt,
       };
     },
@@ -153,11 +154,17 @@ export function createLocalDriver(opts: LocalOptions): StorageDriver {
       }
     },
 
-    async put(key, bytes, contentType): Promise<void> {
+    async put(key, bytes, contentType, opts): Promise<void> {
       if (!(RECEIPT_CONTENT_TYPES as readonly string[]).includes(contentType)) throw new StorageError("Unsupported type.", 400);
       const file = fileFor(key);
       await mkdir(path.dirname(file), { recursive: true });
-      await writeFile(file, bytes);
+      try {
+        // "wx" fails if the file exists, atomically: the same guarantee as ifGenerationMatch=0.
+        await writeFile(file, bytes, { flag: opts?.ifAbsent ? "wx" : "w" });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EEXIST") throw new StorageError("That upload already exists.", 412);
+        throw err;
+      }
       await writeFile(`${file}.meta`, JSON.stringify({ contentType }));
     },
 

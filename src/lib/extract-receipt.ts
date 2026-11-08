@@ -29,22 +29,24 @@ const text120 = z.string().transform((s) => s.replace(/\p{C}/gu, " ").replace(/\
 /** What the model must return. Unknown keys are dropped; a bad category becomes "other". */
 export const modelOutputSchema = z.object({
   isReceipt: z.boolean(),
-  merchant: text120.nullable(),
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
-  currency: z.string().regex(/^[A-Z]{3}$/).nullable(),
-  total: z.number().positive().max(1_000_000).nullable(),
-  tax: z.number().nonnegative().max(1_000_000).nullable(),
+  merchant: text120.nullable().catch(null),
+  // One unreadable field becomes null (and a warning downstream) instead of failing the whole parse.
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().catch(null),
+  currency: z.string().regex(/^[A-Z]{3}$/).nullable().catch(null),
+  total: z.number().positive().max(1_000_000).nullable().catch(null),
+  tax: z.number().nonnegative().max(1_000_000).nullable().catch(null),
   category: z.enum(CATEGORIES).catch("other"),
   lineItems: z
     .array(z.object({ description: text120, amount: money(1_000_000).min(-1_000_000) }))
     .max(30)
     .catch([]),
-  confidence: z.enum(["high", "medium", "low"]),
+  confidence: z.enum(["high", "medium", "low"]).catch("low"),
 });
 export type ModelOutput = z.infer<typeof modelOutputSchema>;
 
 export const WARNING_CODES = [
   "not_a_receipt",
+  "date_missing",
   "date_invalid",
   "date_out_of_range",
   "currency_unsupported",
@@ -52,6 +54,7 @@ export const WARNING_CODES = [
   "merchant_missing",
   "total_missing",
   "total_mismatch",
+  "tax_exceeds_total",
 ] as const;
 export type WarningCode = (typeof WARNING_CODES)[number];
 export type Warning = { code: WarningCode; message: string };
@@ -118,7 +121,9 @@ export function applyGuardrails(out: ModelOutput, now: Date): ReceiptExtraction 
   let confidence = out.confidence;
 
   let spentOn = out.date;
-  if (spentOn !== null) {
+  if (spentOn === null) {
+    warnings.push({ code: "date_missing", message: "The date couldn't be read. Enter it yourself." });
+  } else {
     if (!validDate(spentOn)) {
       spentOn = null;
       warnings.push({ code: "date_invalid", message: "The date couldn't be read. Enter it yourself." });
@@ -145,6 +150,10 @@ export function applyGuardrails(out: ModelOutput, now: Date): ReceiptExtraction 
   if (validTotal === null) warnings.push({ code: "total_missing", message: "The total couldn't be read. Enter it yourself." });
   const taxMinor = out.tax === null ? null : toMinor(out.tax);
   const validTax = taxMinor !== null && taxMinor <= MAX_AMOUNT_MINOR ? taxMinor : null;
+
+  if (validTotal !== null && validTax !== null && validTax > validTotal) {
+    warnings.push({ code: "tax_exceeds_total", message: "The tax is larger than the total. Check both amounts." });
+  }
 
   const merchant = out.merchant && out.merchant.length > 0 ? out.merchant : null;
   if (merchant === null) warnings.push({ code: "merchant_missing", message: "The merchant couldn't be read. Enter it yourself." });

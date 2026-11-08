@@ -53,3 +53,27 @@ export async function consumeRate(tx: Executor, userId: string, kind: RateKind, 
   if (n >= limit) throw new TooManyRequestsError(message);
   await tx.insert(rateEvent).values({ userId, kind });
 }
+
+/** Undo one `consumeRate` (the newest row) when the work it paid for never happened. */
+export async function releaseRate(tx: Executor, userId: string, kind: RateKind): Promise<void> {
+  await tx.execute(sql`
+    delete from rate_event where id = (
+      select id from rate_event where user_id = ${userId} and kind = ${kind} order by at desc limit 1
+    )
+  `);
+}
+
+/** Undo one `reserveDaily` for today. Never goes below zero. */
+export async function releaseDaily(tx: Executor, kind: DailyKind): Promise<void> {
+  await tx.execute(sql`update daily_usage set count = greatest(count - 1, 0) where day = ${today} and kind = ${kind}`);
+}
+
+/** Read-only look at whether `userId` is already at `limit` for `kind` this hour. Advisory: `consumeRate` decides. */
+export async function rateIsFull(userId: string, kind: RateKind, limit: number): Promise<boolean> {
+  const { rateEvent } = schema;
+  const [{ n }] = await db()
+    .select({ n: count() })
+    .from(rateEvent)
+    .where(and(eq(rateEvent.userId, userId), eq(rateEvent.kind, kind), gt(rateEvent.at, sql`now() - interval '1 hour'`)));
+  return n >= limit;
+}
