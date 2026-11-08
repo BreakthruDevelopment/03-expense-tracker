@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 /**
  * POST /api/receipts/uploads. Body: { contentType: "image/jpeg"|"image/png"|"image/webp", sizeBytes }.
  * Returns { receiptId, url, method: "PUT", headers, expiresAt }. The browser must PUT the file to
- * `url` sending exactly `headers` (Content-Type and x-goog-content-length-range are signed), then
+ * `url` sending exactly `headers` (Content-Type, x-goog-content-length-range and x-goog-if-generation-match: 0 are signed; a second PUT gets 412), then
  * POST /api/receipts/:id/confirm.
  */
 export async function POST(request: Request) {

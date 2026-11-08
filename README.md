@@ -36,7 +36,16 @@ The browser must send exactly the returned `headers` on the PUT: `Content-Type` 
 (`1,<sizeBytes>`) are part of the signature, so any other type, or a body outside that size range, is refused by
 storage with a 400. Caps (all fail closed): 30 receipts per user, 20 uploads per user per hour, 100 uploads a day
 app-wide, `STORAGE_MAX_BYTES` stored in total (real sizes after confirm). Unconfirmed uploads older than an hour and
-unused drafts older than a day are swept; removing a user (admin plugin included) deletes their images first.
+unused drafts older than a day are swept. Removing a user through the admin plugin purges their images first (a
+before-hook on `/admin/remove-user`), so a storage failure aborts the removal with nothing deleted. A database hook on
+user deletion purges again as a backstop for other paths (such as self-delete), but Better Auth has already removed that
+user's sessions and accounts by then, so only the hook gives the admin path all-or-nothing behavior.
+
+The signed upload also carries `x-goog-if-generation-match: 0` (create only): a second `PUT` to the same URL gets a 412,
+so a confirmed image can't be overwritten inside the 5-minute window. Magic-byte checks prove a file *starts* like a
+JPEG, PNG or WebP, not that it is only that: a polyglot (valid image, plus script or archive bytes) passes. That is
+acceptable because images are only ever served with a forced `image/*` type and `inline` disposition from the storage
+host, never the app origin, and are only decoded by the model provider.
 
 ## Architecture
 

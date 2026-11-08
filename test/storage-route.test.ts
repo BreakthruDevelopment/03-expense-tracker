@@ -46,6 +46,24 @@ describe("local storage route", () => {
     expect(Buffer.from(await res.arrayBuffer())).toEqual(jpeg);
   });
 
+  it("accepts the signed URL once: a second PUT gets 412 and the first file stays", async () => {
+    const k = `u/alice/${"2".repeat(8)}-2222-4222-8222-${"2".repeat(12)}`;
+    const up = await st.storage().signUpload(k, "image/jpeg", 1000);
+    const send = (body: Buffer, headers: Record<string, string> = up.headers) =>
+      route.PUT(new Request(up.url, { method: "PUT", headers, body: new Uint8Array(body) }), ctx(k));
+    expect((await send(jpeg)).status).toBe(200);
+    const evil = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(100, 9)]);
+    expect((await send(evil)).status).toBe(412);
+    expect(await st.storage().read(k, 1000)).toEqual(jpeg);
+    // Without the signed create-only header the request is refused before anything is written.
+    const k2 = `u/alice/${"3".repeat(8)}-3333-4333-8333-${"3".repeat(12)}`;
+    const up2 = await st.storage().signUpload(k2, "image/jpeg", 1000);
+    const partial2: Record<string, string> = { ...up2.headers };
+    delete partial2["x-goog-if-generation-match"];
+    expect((await route.PUT(new Request(up2.url, { method: "PUT", headers: partial2, body: new Uint8Array(jpeg) }), ctx(k2))).status).toBe(400);
+    expect(await st.storage().head(k2)).toBeNull();
+  });
+
   it("rejects an upload over the signed size range with 400, and an empty one", async () => {
     const up = await st.storage().signUpload(key, "image/jpeg", 50);
     expect((await put(up.url, up.headers, Buffer.alloc(51))).status).toBe(400);

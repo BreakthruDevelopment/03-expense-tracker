@@ -26,7 +26,7 @@ describe("local driver", () => {
     const d = make();
     const up = await d.signUpload(key, "image/jpeg", MAX);
     expect(up.method).toBe("PUT");
-    expect(up.headers).toEqual({ "Content-Type": "image/jpeg", "x-goog-content-length-range": `1,${MAX}` });
+    expect(up.headers).toEqual({ "Content-Type": "image/jpeg", "x-goog-content-length-range": `1,${MAX}`, "x-goog-if-generation-match": "0" });
     expect(up.expiresAt.getTime() - clock.getTime()).toBe(300_000);
 
     const url = new URL(up.url);
@@ -60,6 +60,21 @@ describe("local driver", () => {
     expect(() => checkLocalPutHeaders(p, new Headers({ "content-type": "text/html", "x-goog-content-length-range": "1,1000" }))).toThrow();
     expect(() => checkLocalPutHeaders(p, new Headers({ "content-type": "image/jpeg" }))).toThrow();
     expect(() => checkLocalPutHeaders(p, new Headers({ "content-type": "image/jpeg", "x-goog-content-length-range": "1,999999" }))).toThrow();
+    // The create-only header is required too, and only "0" is accepted.
+    const ok = { "content-type": "image/jpeg", "x-goog-content-length-range": "1,1000" };
+    expect(() => checkLocalPutHeaders(p, new Headers(ok))).toThrow(/generation-match/);
+    expect(() => checkLocalPutHeaders(p, new Headers({ ...ok, "x-goog-if-generation-match": "1" }))).toThrow();
+    expect(() => checkLocalPutHeaders(p, new Headers({ ...ok, "x-goog-if-generation-match": "0" }))).not.toThrow();
+  });
+
+  it("put with ifAbsent refuses to overwrite (412) and keeps the first object", async () => {
+    const d = make();
+    await d.put(key, Buffer.from("first"), "image/png", { ifAbsent: true });
+    await expect(d.put(key, Buffer.from("second"), "image/png", { ifAbsent: true })).rejects.toMatchObject({ status: 412 });
+    expect((await d.read(key, 100))?.toString()).toBe("first");
+    await d.put(key, Buffer.from("plain"), "image/png"); // a server-side put without the flag still overwrites
+    expect((await d.read(key, 100))?.toString()).toBe("plain");
+    await d.remove(key);
   });
 
   it("signs a download that forces the stored type", async () => {

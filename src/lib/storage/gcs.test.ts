@@ -8,7 +8,7 @@ const SA = "cloud-run-apps@proj.iam.gserviceaccount.com";
 const key = objectKeyFor("alice", "0b6f0c1e-3c1a-4f55-9d0a-1f2b3c4d5e6f");
 const NOW = new Date("2026-11-08T12:34:56.789Z");
 const PUT_QUERY =
-  "X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=cloud-run-apps%40proj.iam.gserviceaccount.com%2F20261108%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261108T123456Z&X-Goog-Expires=300&X-Goog-SignedHeaders=content-type%3Bhost%3Bx-goog-content-length-range";
+  "X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=cloud-run-apps%40proj.iam.gserviceaccount.com%2F20261108%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261108T123456Z&X-Goog-Expires=300&X-Goog-SignedHeaders=content-type%3Bhost%3Bx-goog-content-length-range%3Bx-goog-if-generation-match";
 const SIG = Buffer.from("fake-signature-bytes");
 
 type Call = { url: string; init?: RequestInit };
@@ -37,7 +37,7 @@ describe("gcs signed upload", () => {
     const up = await d.signUpload(key, "image/jpeg", 5_242_880);
 
     expect(up.method).toBe("PUT");
-    expect(up.headers).toEqual({ "Content-Type": "image/jpeg", "x-goog-content-length-range": "1,5242880" });
+    expect(up.headers).toEqual({ "Content-Type": "image/jpeg", "x-goog-content-length-range": "1,5242880", "x-goog-if-generation-match": "0" });
     expect(up.expiresAt.toISOString()).toBe("2026-11-08T12:39:56.789Z");
 
     const url = new URL(up.url);
@@ -48,7 +48,7 @@ describe("gcs signed upload", () => {
     expect(q.get("X-Goog-Credential")).toBe(`${SA}/20261108/auto/storage/goog4_request`);
     expect(q.get("X-Goog-Date")).toBe("20261108T123456Z");
     expect(q.get("X-Goog-Expires")).toBe("300");
-    expect(q.get("X-Goog-SignedHeaders")).toBe("content-type;host;x-goog-content-length-range");
+    expect(q.get("X-Goog-SignedHeaders")).toBe("content-type;host;x-goog-content-length-range;x-goog-if-generation-match");
     expect(q.get("X-Goog-Signature")).toBe(SIG.toString("hex"));
 
     // Fixed expected values for this test's inputs (not derived from the driver's output).
@@ -60,8 +60,19 @@ describe("gcs signed upload", () => {
       "GOOG4-RSA-SHA256",
       "20261108T123456Z",
       "20261108/auto/storage/goog4_request",
-      // sha256 of the PUT canonical request for these inputs
-      "67e41786556107cc8492cab571aa076f36eb48290a5c52c18c8b1a5835ea6f73",
+      // sha256 of the PUT canonical request, written out here by hand (headers sorted, create-only header included)
+      createHash("sha256")
+        .update(
+          [
+            "PUT",
+            "/proj-expense-tracker-uploads/u/alice/0b6f0c1e-3c1a-4f55-9d0a-1f2b3c4d5e6f",
+            PUT_QUERY,
+            "content-type:image/jpeg\nhost:storage.googleapis.com\nx-goog-content-length-range:1,5242880\nx-goog-if-generation-match:0\n",
+            "content-type;host;x-goog-content-length-range;x-goog-if-generation-match",
+            "UNSIGNED-PAYLOAD",
+          ].join("\n"),
+        )
+        .digest("hex"),
     ]);
     // Signed as the service account through IAM, with the metadata token.
     expect(sign.url).toContain(`/serviceAccounts/${encodeURIComponent(SA)}:signBlob`);
@@ -130,12 +141,15 @@ describe("gcs object calls", () => {
     expect(await d.head(key)).toEqual({ size: 5, contentType: "image/png" });
     expect((await d.read(key, 100))?.toString()).toBe("bytes");
     await d.put(key, Buffer.from("x"), "image/jpeg");
+    await d.put(key, Buffer.from("x"), "image/jpeg", { ifAbsent: true });
     await d.remove(key);
 
     const encoded = encodeURIComponent(key);
     expect(g.calls.some((c) => c.url.startsWith(`https://storage.googleapis.com/storage/v1/b/${BUCKET}/o/${encoded}?fields=`))).toBe(true);
-    const put = g.calls.find((c) => c.url.includes("/upload/storage/v1/"))!;
+    const [put, guarded] = g.calls.filter((c) => c.url.includes("/upload/storage/v1/"));
     expect(put.url).toContain(`uploadType=media&name=${encoded}`);
+    expect(put.url).not.toContain("ifGenerationMatch");
+    expect(guarded.url).toContain("ifGenerationMatch=0");
     expect((put.init!.headers as Record<string, string>)["content-type"]).toBe("image/jpeg");
     for (const c of g.calls.filter((c) => c.url.includes("storage/v1"))) {
       expect((c.init!.headers as Record<string, string>).authorization).toBe("Bearer tok-1");
@@ -152,6 +166,12 @@ describe("gcs object calls", () => {
     status.current = 500;
     await expect(d.head(key)).rejects.toMatchObject({ status: 502 });
     await expect(d.remove(key)).rejects.toMatchObject({ status: 502 });
+  });
+
+  it("maps a failed create-only precondition to 412", async () => {
+    const g = fakeGoogle({ "https://storage.googleapis.com/upload/": () => new Response("{}", { status: 412 }) });
+    const d = createGcsDriver({ bucket: BUCKET, fetch: g.fetch, now: () => NOW });
+    await expect(d.put(key, Buffer.from("x"), "image/png", { ifAbsent: true })).rejects.toMatchObject({ status: 412 });
   });
 
   it("refuses an object larger than the read cap", async () => {

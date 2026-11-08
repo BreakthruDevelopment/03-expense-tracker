@@ -30,7 +30,8 @@ export async function PUT(request: Request, ctx: RouteContext<"/api/storage/loca
       throw err;
     }
     if (bytes.length < 1) throw new BadRequestError("Upload is empty.");
-    await storage().put(p.key, bytes, p.contentType);
+    // The signed header says create-only, like GCS: a second PUT to the same key is a 412.
+    await storage().put(p.key, bytes, p.contentType, { ifAbsent: true });
     return new Response(null, { status: 200 });
   } catch (err) {
     return errorResponse(err);

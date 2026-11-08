@@ -18,7 +18,10 @@ export type ObjectHead = { size: number; contentType: string };
 /** One shape for every driver, so callers never know which one is running. */
 export interface StorageDriver {
   readonly kind: StorageKind;
-  /** V4 signed PUT URL: exact content type, size range 1..maxBytes, 5-minute expiry. */
+  /**
+   * V4 signed PUT URL: exact content type, size range 1..maxBytes, 5-minute expiry, and
+   * `x-goog-if-generation-match: 0` (create only; a second PUT to the same key gets 412).
+   */
   signUpload(key: string, contentType: ReceiptContentType, maxBytes: number): Promise<SignedUpload>;
   /** Signed GET URL: 5-minute expiry, response type forced to `contentType`. */
   signDownload(key: string, contentType: ReceiptContentType): Promise<SignedDownload>;
@@ -26,8 +29,8 @@ export interface StorageDriver {
   head(key: string): Promise<ObjectHead | null>;
   /** The object's bytes (read with the app's own credentials), or null when it doesn't exist. */
   read(key: string, maxBytes: number): Promise<Buffer | null>;
-  /** Upload server-side (demo workspace). */
-  put(key: string, bytes: Buffer, contentType: ReceiptContentType): Promise<void>;
+  /** Upload server-side (demo workspace). With `ifAbsent`, an existing object is refused with a 412 StorageError. */
+  put(key: string, bytes: Buffer, contentType: ReceiptContentType, opts?: { ifAbsent?: boolean }): Promise<void>;
   /** Idempotent: a missing object is not an error. */
   remove(key: string): Promise<void>;
 }

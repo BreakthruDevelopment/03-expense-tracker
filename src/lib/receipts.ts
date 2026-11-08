@@ -7,6 +7,7 @@ import type { Receipt } from "@/lib/db/schema";
 import {
   DOWNLOADS_PER_HOUR,
   MAX_RECEIPT_BYTES,
+  PURGES_PER_HOUR,
   type ReceiptContentType,
   STALE_DRAFT_SECONDS,
   STALE_UPLOAD_SECONDS,
@@ -15,14 +16,14 @@ import {
 } from "@/lib/domain";
 import { env } from "@/lib/env";
 import { ConflictError, NotFoundError, TooManyRequestsError, UnprocessableError } from "@/lib/errors";
-import { idSchema, initUploadSchema } from "@/lib/expense-schemas";
+import { idSchema, initUploadSchema, userIdSchema } from "@/lib/expense-schemas";
 import { log } from "@/lib/log";
 import { matchesMagic } from "@/lib/magic";
 import { ownedBy } from "@/lib/owned";
 import { StorageError, StorageUnavailableError, objectKeyFor, storage } from "@/lib/storage";
-import { advisoryLock, consumeRate, dailyCount, reserveDaily } from "@/lib/usage";
+import { advisoryLock, consumeRate, dailyCount, releaseDaily, releaseRate, reserveDaily } from "@/lib/usage";
 
-const { receipt, expense, user, rateEvent } = schema;
+const { receipt, expense, user } = schema;
 
 /**
  * What POST /api/receipts/uploads returns. The browser must PUT the file to `url` with exactly
@@ -116,7 +117,14 @@ export async function initUpload(actor: Actor, input: unknown): Promise<UploadTi
     const signed = await driver.signUpload(key, data.contentType, data.sizeBytes);
     return { receiptId: id, url: signed.url, method: signed.method, headers: signed.headers, expiresAt: signed.expiresAt.toISOString() };
   } catch (err) {
-    await db().delete(receipt).where(eq(receipt.id, id));
+    // The reservation committed above; give it back so a signing failure costs the user nothing.
+    await db()
+      .transaction(async (tx) => {
+        await tx.delete(receipt).where(eq(receipt.id, id));
+        await releaseRate(tx, actor.id, "upload");
+        await releaseDaily(tx, "upload");
+      })
+      .catch((e) => log.error("receipt.release_failed", { error: e instanceof Error ? e.message : String(e) }));
     throw err;
   }
 }
@@ -147,7 +155,14 @@ export async function verifyUpload(actor: Actor, id: string): Promise<{ receipt:
     return reject(r, "The uploaded file is empty or larger than allowed.");
   }
   if (head.contentType !== r.contentType) return reject(r, "The uploaded file's type doesn't match.");
-  const bytes = await driver.read(r.objectKey, MAX_RECEIPT_BYTES);
+  let bytes: Buffer | null;
+  try {
+    bytes = await driver.read(r.objectKey, MAX_RECEIPT_BYTES);
+  } catch (err) {
+    // The object grew past the cap between head and read: same outcome as a bad size.
+    if (err instanceof StorageError && err.status === 422) return reject(r, "The uploaded file is empty or larger than allowed.");
+    throw err;
+  }
   if (!bytes) throw new ConflictError("The file hasn't been uploaded yet.");
   if (bytes.length !== head.size || !matchesMagic(r.contentType, bytes)) {
     return reject(r, "That file isn't a JPEG, PNG or WebP image.");
@@ -188,44 +203,71 @@ export async function deleteReceiptObjectAndRow(ownerId: string, receiptId: stri
   await db().delete(receipt).where(eq(receipt.id, r.id));
 }
 
-/** Discard a draft (a receipt no expense uses): object then row. */
+/**
+ * Discard a draft (a receipt no expense uses): object then row. The row is locked first, and the
+ * attachment check runs after the lock in its own statement (so it sees any expense that
+ * committed while we waited). `createExpense` locks the same row, so a draft can't be attached
+ * and deleted at once. A storage failure rolls back and leaves the row.
+ */
 export async function discardDraft(actor: Actor, id: string): Promise<void> {
-  const r = await loadOwned(actor, parseId(id));
-  const [attached] = await db().select({ id: expense.id }).from(expense).where(eq(expense.receiptId, r.id)).limit(1);
-  if (attached) throw new ConflictError("That receipt belongs to an expense. Delete the expense instead.");
-  await removeObject(r.objectKey);
-  await db().delete(receipt).where(eq(receipt.id, r.id));
+  const rid = parseId(id);
+  await db().transaction(async (tx) => {
+    const [r] = await tx
+      .select({ id: receipt.id, objectKey: receipt.objectKey })
+      .from(receipt)
+      .where(ownedBy(receipt, actor, eq(receipt.id, rid)))
+      .for("update")
+      .limit(1);
+    if (!r) throw new NotFoundError("Receipt not found");
+    const [attached] = await tx.select({ id: expense.id }).from(expense).where(eq(expense.receiptId, r.id)).limit(1);
+    if (attached) throw new ConflictError("That receipt belongs to an expense. Delete the expense instead.");
+    await removeObject(r.objectKey);
+    await tx.delete(receipt).where(eq(receipt.id, r.id));
+  });
 }
-
-const unattached = sql`not exists (select 1 from ${expense} where ${expense.receiptId} = ${receipt.id})`;
 
 /**
  * Remove stale receipts, object then row, at most 50 per call: uploads never confirmed (or rejected)
  * older than an hour, and drafts no expense uses older than 24 hours. Scoped to one owner when given.
+ * Each row is handled in its own transaction: lock it (skipping rows another request holds), check it is
+ * still stale and unattached, delete the object, delete the row. A draft saved a moment ago is never
+ * deleted, because `createExpense` locks the same row.
  */
 export async function sweepStaleReceipts(opts: { ownerId?: string; limit?: number } = {}): Promise<number> {
   const stale = and(
     opts.ownerId ? eq(receipt.ownerId, opts.ownerId) : undefined,
     or(
       and(inArray(receipt.status, ["uploading", "rejected"]), lt(receipt.createdAt, sql`now() - ${sql.raw(`interval '${STALE_UPLOAD_SECONDS} seconds'`)}`)),
-      and(eq(receipt.status, "ready"), lt(receipt.createdAt, sql`now() - ${sql.raw(`interval '${STALE_DRAFT_SECONDS} seconds'`)}`), unattached),
+      and(eq(receipt.status, "ready"), lt(receipt.createdAt, sql`now() - ${sql.raw(`interval '${STALE_DRAFT_SECONDS} seconds'`)}`)),
     ),
   );
   const rows = await db()
-    .select({ id: receipt.id, objectKey: receipt.objectKey })
+    .select({ id: receipt.id })
     .from(receipt)
     .where(stale)
     .orderBy(receipt.createdAt)
     .limit(Math.min(opts.limit ?? SWEEP_BATCH, SWEEP_BATCH));
   let removed = 0;
-  for (const r of rows) {
+  for (const row of rows) {
     try {
-      await removeObject(r.objectKey);
-      // Re-check unattached so a draft saved a moment ago is never deleted (its expense would lose the link).
-      const gone = await db().delete(receipt).where(and(eq(receipt.id, r.id), or(ne(receipt.status, "ready"), unattached))).returning({ id: receipt.id });
-      removed += gone.length;
+      const gone = await db().transaction(async (tx) => {
+        const [r] = await tx
+          .select({ id: receipt.id, objectKey: receipt.objectKey, status: receipt.status })
+          .from(receipt)
+          .where(and(eq(receipt.id, row.id), stale))
+          .for("update", { skipLocked: true });
+        if (!r) return false;
+        if (r.status === "ready") {
+          const [attached] = await tx.select({ id: expense.id }).from(expense).where(eq(expense.receiptId, r.id)).limit(1);
+          if (attached) return false;
+        }
+        await removeObject(r.objectKey);
+        await tx.delete(receipt).where(eq(receipt.id, r.id));
+        return true;
+      });
+      if (gone) removed += 1;
     } catch (err) {
-      log.warn("receipt.sweep_item_failed", { receiptId: r.id, error: err instanceof Error ? err.message : String(err) });
+      log.warn("receipt.sweep_item_failed", { receiptId: row.id, error: err instanceof Error ? err.message : String(err) });
     }
   }
   return removed;
@@ -255,9 +297,11 @@ export async function purgeUserReceipts(userId: string): Promise<number> {
 /** Admin only: purge one user's images (abuse or quota). Never exposes the images themselves. */
 export async function adminPurgeReceipts(actor: Actor, userId: string): Promise<{ purged: number }> {
   assertCan(actor, "read"); // without a resource only admin passes
-  const [target] = await db().select({ id: user.id }).from(user).where(eq(user.id, String(userId))).limit(1);
+  const parsed = userIdSchema.safeParse(userId);
+  if (!parsed.success) throw new NotFoundError("User not found");
+  const [target] = await db().select({ id: user.id }).from(user).where(eq(user.id, parsed.data)).limit(1);
   if (!target) throw new NotFoundError("User not found");
-  await db().insert(rateEvent).values({ userId: actor.id, kind: "purge" });
+  await db().transaction((tx) => consumeRate(tx, actor.id, "purge", PURGES_PER_HOUR, "Too many purges this hour. Try again later."));
   const purged = await purgeUserReceipts(target.id);
   log.info("admin.purge_receipts", { by: actor.id, user: target.id, purged });
   return { purged };

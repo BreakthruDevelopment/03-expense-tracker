@@ -2,6 +2,8 @@ import { z } from "zod";
 import { CATEGORIES, CURRENCIES, MAX_AMOUNT_MINOR, RECEIPT_CONTENT_TYPES, MAX_RECEIPT_BYTES } from "@/lib/domain";
 
 export const idSchema = z.uuid();
+/** A Better Auth user id (random string; the same alphabet object keys allow). */
+export const userIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 export const monthSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Month must be YYYY-MM");
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD").refine((s) => {
   const d = new Date(`${s}T00:00:00Z`);

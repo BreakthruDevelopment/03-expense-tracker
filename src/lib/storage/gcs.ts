@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ReceiptContentType } from "@/lib/domain";
 import { log } from "@/lib/log";
-import { assertBucketName, assertObjectKey, inlineDisposition, lengthRange } from "./keys";
+import { IF_GENERATION_MATCH, assertBucketName, assertObjectKey, inlineDisposition, lengthRange } from "./keys";
 import {
   DOWNLOAD_TTL_SECONDS,
   type ObjectHead,
@@ -151,7 +151,7 @@ export function createGcsDriver(opts: GcsOptions): StorageDriver {
     kind: "gcs",
 
     async signUpload(key, contentType: ReceiptContentType, maxBytes): Promise<SignedUpload> {
-      const headers = { "Content-Type": contentType, "x-goog-content-length-range": lengthRange(maxBytes) };
+      const headers = { "Content-Type": contentType, "x-goog-content-length-range": lengthRange(maxBytes), [IF_GENERATION_MATCH]: "0" };
       const { url, expiresAt } = await signUrl("PUT", key, UPLOAD_TTL_SECONDS, headers);
       return { url, method: "PUT", headers, expiresAt };
     },
@@ -190,13 +190,15 @@ export function createGcsDriver(opts: GcsOptions): StorageDriver {
       return bytes;
     },
 
-    async put(key, bytes, contentType): Promise<void> {
+    async put(key, bytes, contentType, opts): Promise<void> {
       assertObjectKey(key);
-      const res = await call(`https://${HOST}/upload/storage/v1/b/${bucket}/o?uploadType=media&name=${enc(key)}`, {
+      const match = opts?.ifAbsent ? "&ifGenerationMatch=0" : "";
+      const res = await call(`https://${HOST}/upload/storage/v1/b/${bucket}/o?uploadType=media&name=${enc(key)}${match}`, {
         method: "POST",
         headers: { ...(await auth()), "content-type": contentType },
         body: new Uint8Array(bytes),
       });
+      if (res.status === 412) throw new StorageError("That upload already exists.", 412);
       if (!res.ok) {
         log.error("storage.gcs.put", { status: res.status });
         throw new StorageError();

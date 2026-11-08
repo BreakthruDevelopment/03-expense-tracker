@@ -31,6 +31,8 @@ export const EXPORT_MAX_ROWS = 5000;
 export const UPLOADS_PER_HOUR = 20;
 export const DOWNLOADS_PER_HOUR = 120;
 export const EXTRACTIONS_PER_HOUR = 10;
+/** Admin purges per admin per hour. */
+export const PURGES_PER_HOUR = 30;
 
 /** Stale receipts the sweep removes: an upload never confirmed, and a confirmed draft nobody saved. */
 export const STALE_UPLOAD_SECONDS = 60 * 60;
