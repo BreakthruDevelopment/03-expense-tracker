@@ -4,7 +4,7 @@ name: Live smoke test
 # real bucket, extract (live or demo), CSV and cleanup. Two ways to point it at a URL:
 #   - Actions tab > Run workflow, and type the base URL; or
 #   - push a claude/live-smoke* branch that has the URL in .github/live-smoke-url (one line).
-# .github/live-smoke-url holds the current run.app URL; change it when the app moves to its app3 domain.
+# .github/live-smoke-url holds the live URL (https://app3.breakthruventures.ai).
 on:
   workflow_dispatch:
     inputs:
