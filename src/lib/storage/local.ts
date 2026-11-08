@@ -18,7 +18,7 @@ import {
 /**
  * Filesystem driver for development and CI. It behaves like the GCS driver: URLs are signed
  * (HMAC), expire after 5 minutes, and pin the content type and size range. The app serves
- * them itself at /api/storage/local/<key>. It refuses to run in production.
+ * them itself at /api/storage/local/<key>. It refuses to run in production unless `allowInProduction` is set (see local-policy.ts).
  */
 
 export type LocalOptions = {
@@ -28,6 +28,8 @@ export type LocalOptions = {
   baseUrl: string;
   now?: () => Date;
   nodeEnv?: string;
+  /** CI only: the caller has already checked the policy in local-policy.ts. */
+  allowInProduction?: boolean;
 };
 
 export type LocalUrlParams = {
@@ -80,7 +82,7 @@ export function checkLocalPutHeaders(p: LocalUrlParams, headers: Headers): void 
 }
 
 export function createLocalDriver(opts: LocalOptions): StorageDriver {
-  if ((opts.nodeEnv ?? process.env.NODE_ENV) === "production") {
+  if (!opts.allowInProduction && (opts.nodeEnv ?? process.env.NODE_ENV) === "production") {
     throw new StorageError("The local storage driver can't run in production.", 500);
   }
   const root = path.resolve(opts.dir);

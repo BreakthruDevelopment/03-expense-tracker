@@ -34,6 +34,12 @@ const schema = z.object({
     .optional(),
   // Where the local storage driver keeps files (development and CI only). Its signed URLs are HMACed with BETTER_AUTH_SECRET.
   STORAGE_LOCAL_DIR: z.string().default(".data/uploads"),
+  // CI only: lets the built (production-mode) app use the local driver so smoke can upload.
+  // Ignored (and storage() throws) unless APP_URL is http on localhost; never set in a deployment.
+  STORAGE_ALLOW_LOCAL: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   // Free-tier caps (see the spec's budget table).
   UPLOAD_DAILY_CAP: z.coerce.number().int().positive().default(100),
   EXTRACT_DAILY_CAP: z.coerce.number().int().positive().default(100),
