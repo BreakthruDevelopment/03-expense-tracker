@@ -1,6 +1,6 @@
 import { requireRole } from "@/lib/auth/session";
 import { requireSameOrigin } from "@/lib/csrf";
-import { assertDemoStorage, loadDemoWorkspace, reserveDemoLoad } from "@/lib/demo-workspace";
+import { assertDemoStorage, loadDemoWorkspace, releaseDemoLoad, reserveDemoLoad } from "@/lib/demo-workspace";
 import { errorResponse } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +17,12 @@ export async function POST(request: Request) {
     requireSameOrigin(request);
     assertDemoStorage();
     await reserveDemoLoad(actor);
-    return Response.json(await loadDemoWorkspace(actor));
+    try {
+      return Response.json(await loadDemoWorkspace(actor));
+    } catch (err) {
+      await releaseDemoLoad().catch(() => undefined);
+      throw err;
+    }
   } catch (err) {
     return errorResponse(err);
   }

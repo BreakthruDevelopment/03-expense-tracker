@@ -14,6 +14,10 @@ export function demoSeedConfig(values: Record<string, string | undefined> = proc
   if (dbHost && (dbHost === "postgres.database.azure.com" || dbHost.endsWith(".postgres.database.azure.com"))) {
     throw new Error("Demo seed refused: DATABASE_URL is a production database host.");
   }
+  // Cloud SQL sockets (`?host=/cloudsql/project:region:instance`) are the Google Cloud production database.
+  if (values.DATABASE_URL && /(\/|%2f)cloudsql(\/|%2f)/i.test(values.DATABASE_URL)) {
+    throw new Error("Demo seed refused: DATABASE_URL is a production database host.");
+  }
   const password = z.string().min(10).max(128).parse(values.DEMO_PASSWORD);
   return { appUrl, password };
 }

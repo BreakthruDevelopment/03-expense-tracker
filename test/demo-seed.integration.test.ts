@@ -49,6 +49,11 @@ describe("demo CLI guards", () => {
   it("allows a lookalike host that only contains the production name", () => {
     expect(demoSeedConfig({ ...base, APP_URL: "https://app3.breakthruventures.ai.evil.com" }).appUrl).toContain("evil.com");
   });
+  it("refuses a Cloud SQL socket database", () => {
+    for (const DATABASE_URL of ["postgres://u:p@/db?host=/cloudsql/proj:us-central1:inst", "postgres://u:p@/db?host=%2Fcloudsql%2Fproj%3Aus%3Ainst"]) {
+      expect(() => demoSeedConfig({ ...base, DATABASE_URL })).toThrow("production database");
+    }
+  });
   it("needs an explicit password of at least 10 characters", () => {
     expect(demoSeedConfig(base).password).toBe(base.DEMO_PASSWORD);
     expect(() => demoSeedConfig({ ...base, DEMO_PASSWORD: undefined })).toThrow();
@@ -336,6 +341,32 @@ describe.skipIf(!url)("demo workspace (Postgres, Better Auth, local storage)", (
     await sql`update rate_event set at = now() - interval '61 seconds' where kind = 'demo_load'`;
     await loader.reserveDemoLoad(actor);
   });
+
+  it("concurrent reservations during a load answer 429 at once instead of exhausting the pool", async () => {
+    const running = load();
+    // Let the load take its lock and start working, then hammer the reservation path (pool of 5).
+    await new Promise((r) => setTimeout(r, 300));
+    const started = Date.now();
+    const calls = await Promise.race([
+      Promise.allSettled(Array.from({ length: 4 }, () => loader.reserveDemoLoad(actor))),
+      new Promise<"hung">((r) => setTimeout(() => r("hung"), 8000)),
+    ]);
+    expect(calls).not.toBe("hung");
+    expect(Date.now() - started).toBeLessThan(5000);
+    for (const c of calls as PromiseSettledResult<void>[]) {
+      expect(c.status).toBe("rejected");
+      expect((c as PromiseRejectedResult).reason).toMatchObject({ status: 429, message: expect.stringMatching(/already running/) });
+    }
+    expect(await running).toEqual({ users: 3, expenses: 30, receipts: 5 });
+    expect(await snapshot()).toHaveLength(30);
+  }, 60000);
+
+  it("a failed route load gives back the day's reservation", async () => {
+    const collision = await api.api.createUser({ body: { email: "ada@demo.breakthru.test", name: "Real Ada", password: base.DEMO_PASSWORD } });
+    expect(collision.user.id).toBeTruthy();
+    expect((await post(req())).status).toBe(409);
+    expect((await sql`select count from daily_usage where kind = 'demo_load'`)[0].count).toBe(0);
+  }, 30000);
 
   it("serializes concurrent loads", async () => {
     await Promise.all([load(), load()]);

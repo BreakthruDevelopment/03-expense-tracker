@@ -17,7 +17,8 @@ import { applyGuardrails, modelOutputSchema } from "@/lib/extract-receipt";
 import { matchesMagic } from "@/lib/magic";
 import { purgeUserReceipts } from "@/lib/receipts";
 import { StorageError, StorageUnavailableError, objectKeyFor, storage } from "@/lib/storage";
-import { reserveDaily } from "@/lib/usage";
+import { log } from "@/lib/log";
+import { releaseDaily, reserveDaily } from "@/lib/usage";
 
 const PEOPLE = ["Ada", "Ben", "Cleo"] as const;
 type Person = (typeof PEOPLE)[number];
@@ -100,7 +101,9 @@ export async function reserveDemoLoad(actor: Actor): Promise<void> {
   assertCan(actor, "delete"); // no resource: admin only
   const { rateEvent } = schema;
   await db().transaction(async (tx) => {
-    await tx.execute(sql`select ${LOCK}`);
+    // Never wait here: a waiting request would hold a pool connection while the load needs several.
+    const [{ ok }] = await tx.execute<{ ok: boolean }>(sql`select pg_try_advisory_xact_lock(hashtextextended(${"demo-load"}, 0)) as ok`);
+    if (!ok) throw new TooManyRequestsError("A demo load is already running. Try again shortly.");
     const any = eq(rateEvent.kind, "demo_load");
     await tx.delete(rateEvent).where(and(any, sql`${rateEvent.at} <= now() - interval '1 minute'`));
     const [{ n }] = await tx.select({ n: count() }).from(rateEvent).where(and(any, gt(rateEvent.at, sql`now() - interval '1 minute'`)));
@@ -110,6 +113,12 @@ export async function reserveDemoLoad(actor: Actor): Promise<void> {
     }
     await tx.insert(rateEvent).values({ userId: actor.id, kind: "demo_load" });
   });
+  log.info("admin.demo_load", { by: actor.id });
+}
+
+/** Give back the day's reservation when the load it paid for failed, so failures don't burn the quota. */
+export async function releaseDemoLoad(): Promise<void> {
+  await db().transaction((tx) => releaseDaily(tx, "demo_load"));
 }
 
 /**
@@ -233,7 +242,7 @@ async function loadLocked(actor: Actor, mode: "admin" | "cli", now: Date) {
         receiptId: id,
       });
     } catch (err) {
-      await storage().remove(key).catch(() => undefined);
+      await storage().remove(key).catch((e) => log.error("receipt.object_remove_failed", { error: e instanceof Error ? e.message : String(e) }));
       await db().delete(schema.receipt).where(eq(schema.receipt.id, id));
       throw err;
     }
