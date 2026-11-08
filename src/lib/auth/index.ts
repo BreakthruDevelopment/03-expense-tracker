@@ -8,6 +8,7 @@ import { z } from "zod";
 import { db, schema } from "@/lib/db";
 import { isDemoEmail, MARKER } from "@/lib/demo-identity";
 import { env } from "@/lib/env";
+import { ac, DISABLED_AUTH_PATHS, roles } from "./permissions";
 import { log } from "@/lib/log";
 
 const removeUserBody = z.object({ userId: z.coerce.string().min(1) });
@@ -85,6 +86,9 @@ function createAuth() {
     advanced: {
       useSecureCookies: e.APP_URL.startsWith("https://"),
     },
+    // Admins manage roles, bans and accounts but cannot impersonate or reset passwords
+    // (see permissions.ts). The paths are also blocked outright, as a second layer.
+    disabledPaths: DISABLED_AUTH_PATHS,
     hooks: { before: purgeBeforeRemoveUser },
     // Backstop for any other way a user gets deleted (the self-delete endpoint, a future script):
     // purge the receipt images first so the database cascade can't orphan the files. A storage
@@ -103,7 +107,10 @@ function createAuth() {
         },
       },
     },
-    plugins: [admin({ defaultRole: "user", adminRoles: ["admin"] }), nextCookies()],
+    plugins: [
+      admin({ ac, roles, defaultRole: "user", adminRoles: ["admin"] }),
+      nextCookies(),
+    ],
   });
 }
 
