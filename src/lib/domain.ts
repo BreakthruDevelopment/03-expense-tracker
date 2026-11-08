@@ -30,8 +30,12 @@ export const EXPORT_MAX_ROWS = 5000;
 /** Per-user sliding-window limits (one hour). */
 export const UPLOADS_PER_HOUR = 20;
 export const DOWNLOADS_PER_HOUR = 120;
+export const EXTRACTIONS_PER_HOUR = 10;
 
 /** Stale receipts the sweep removes: an upload never confirmed, and a confirmed draft nobody saved. */
 export const STALE_UPLOAD_SECONDS = 60 * 60;
 export const STALE_DRAFT_SECONDS = 24 * 60 * 60;
 export const SWEEP_BATCH = 50;
+
+/** A claimed extraction that never finished (crashed instance) can be claimed again after this long. */
+export const EXTRACT_CLAIM_SECONDS = 60;
