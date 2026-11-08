@@ -6,7 +6,7 @@ import { z } from "zod";
  */
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  APP_NAME: z.string().default("30 Apps Template"),
+  APP_NAME: z.string().default("Expense Tracker"),
   // The public URL, e.g. https://app7.breakthruventures.ai. Sign-in callbacks,
   // cookies and CORS all derive from it, so a domain change never touches code.
   APP_URL: z.string().url().default("http://localhost:3000"),
@@ -26,6 +26,19 @@ const schema = z.object({
   AI_EMBED_MODEL: z.string().optional(),
   // Provider call timeout. 20 s keeps AI calls inside Lambda's 29 s limit (route maxDuration is 25 s).
   AI_TIMEOUT_MS: z.coerce.number().int().positive().max(22000).default(20000),
+  // Private Cloud Storage bucket for receipt images. Unset: the local driver in development
+  // and test, and no uploads (manual entry only) in production. Infra also sets UPLOAD_BUCKET.
+  STORAGE_BUCKET: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/, "STORAGE_BUCKET is not a valid bucket name")
+    .optional(),
+  // Where the local storage driver keeps files (development and CI only). Its signed URLs are HMACed with BETTER_AUTH_SECRET.
+  STORAGE_LOCAL_DIR: z.string().default(".data/uploads"),
+  // Free-tier caps (see the spec's budget table).
+  UPLOAD_DAILY_CAP: z.coerce.number().int().positive().default(100),
+  EXTRACT_DAILY_CAP: z.coerce.number().int().positive().default(100),
+  STORAGE_MAX_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024 * 1024),
+  RECEIPTS_PER_USER: z.coerce.number().int().positive().default(30),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 });
 

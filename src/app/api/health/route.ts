@@ -1,4 +1,5 @@
 import { pingDb } from "@/lib/db";
+import { storage } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
 
@@ -10,9 +11,11 @@ export async function GET() {
   const dbOk = await pingDb();
   const body = {
     status: dbOk ? "ok" : "degraded",
-    app: process.env.APP_NAME ?? "30-apps-template",
+    app: process.env.APP_NAME ?? "expense-tracker",
     version: process.env.APP_VERSION ?? "dev",
     cloud: process.env.CLOUD ?? "local",
+    // Which driver is active; never the bucket name.
+    storage: storage().kind,
     checks: { database: dbOk ? "ok" : "unreachable" },
     time: new Date().toISOString(),
   };

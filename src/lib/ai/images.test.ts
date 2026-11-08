@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { demoFixtures } from "./demo";
 import { resetEnvCache } from "@/lib/env";
 import { type AiImage, AiError, MAX_IMAGE_BYTES, generate } from "./index";
 import { anthropicProvider, geminiProvider } from "./providers";
 
 const schema = z.object({ summary: z.string(), highlights: z.array(z.string()) });
+// Plumbing tests use their own fixture; the app's real fixtures live in demo.ts.
+demoFixtures["test-summary"] = { summary: "A short summary.", highlights: ["One", "Two"] };
 const b64 = (bytes: number) => Buffer.alloc(bytes, 1).toString("base64");
 const img = (bytes = 12, mimeType: AiImage["mimeType"] = "image/png"): AiImage => ({ mimeType, data: b64(bytes) });
 
@@ -97,7 +100,7 @@ describe("provider request bodies", () => {
 });
 
 describe("generate() image caps", () => {
-  const run = (images: AiImage[]) => generate({ task: "summarize-items", system: "s", prompt: "p", schema, images });
+  const run = (images: AiImage[]) => generate({ task: "test-summary", system: "s", prompt: "p", schema, images });
 
   beforeEach(() => {
     setEnv({ AI_PROVIDER: "gemini", GEMINI_API_KEY: "k" });
@@ -141,7 +144,7 @@ describe("demo mode and logging", () => {
   it("answers from the fixture regardless of images", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    const r = await generate({ task: "summarize-items", system: "s", prompt: "p", schema, images: [img()] });
+    const r = await generate({ task: "test-summary", system: "s", prompt: "p", schema, images: [img()] });
     expect(r.demo).toBe(true);
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -155,7 +158,7 @@ describe("demo mode and logging", () => {
     }
     vi.spyOn(process.stdout, "write").mockImplementation((c: string | Uint8Array) => (out.push(String(c)), true));
     const a = img(300);
-    await generate({ task: "summarize-items", system: "s", prompt: "p", schema, images: [a] });
+    await generate({ task: "test-summary", system: "s", prompt: "p", schema, images: [a] });
     const text = out.join("\n");
     expect(text).toContain("ai.generate");
     expect(text).toContain('"images":1');
