@@ -24,7 +24,7 @@ export default async function Home() {
               <Link href="/expenses" className={buttonPrimary}>
                 View expenses
               </Link>
-              <Link href="/scan" className={buttonOutlineAccent}>
+              <Link href="/expenses/new" className={buttonOutlineAccent}>
                 Scan a receipt
               </Link>
             </>

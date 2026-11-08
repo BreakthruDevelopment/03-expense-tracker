@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { currentMonth, formatDay, formatMoney, monthLabel, monthRange, shiftMonth } from "./format";
+import { currentMonth, formatBytes, formatDay, formatMoney, monthLabel, monthRange, shiftMonth } from "./format";
 
 describe("format", () => {
   it("formats integer cents per currency", () => {
@@ -16,5 +16,12 @@ describe("format", () => {
     expect(monthRange("2028-02")).toEqual({ from: "2028-02-01", to: "2028-02-29" });
     expect(currentMonth(new Date("2026-11-08T12:00:00Z"))).toBe("2026-11");
     expect(formatDay("2026-10-04")).toBe("Oct 4, 2026");
+  });
+
+  it("formats byte counts", () => {
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(1536)).toBe("1.5 KB");
+    expect(formatBytes(5 * 1024 * 1024)).toBe("5.0 MB");
+    expect(formatBytes(2 * 1024 ** 3)).toBe("2.0 GB");
   });
 });
